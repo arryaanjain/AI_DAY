@@ -1,122 +1,14 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import axios from 'axios'
 
-function App() {
-  const [count, setCount] = useState(0)
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8080', withCredentials: true })
+type PublicConfig = { authMode: 'phone' | 'microsoft'; pricePerGenerationPaise: number; currency: string; enabledModules: string[] }
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
-}
-
-export default App
+function Shell({ children }: { children: React.ReactNode }) { return <main className="min-h-screen bg-slate-950 text-slate-100"><nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5"><Link to="/" className="text-lg font-bold tracking-tight">AI Day</Link><div className="flex gap-5 text-sm text-slate-300"><Link to="/generations">My creations</Link><Link to="/payments">Payments</Link></div></nav>{children}</main> }
+function Landing() { const config = useQuery({ queryKey: ['public-config'], queryFn: async () => (await api.get<{data: PublicConfig}>('/api/v1/config/public')).data.data }); const price = config.data ? `₹${config.data.pricePerGenerationPaise / 100}` : '₹20'; return <Shell><section className="mx-auto max-w-6xl px-6 py-20"><p className="mb-4 text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">Create something personal</p><h1 className="max-w-3xl text-5xl font-bold tracking-tight sm:text-7xl">Your memories, illustrated with care.</h1><p className="mt-6 max-w-2xl text-lg text-slate-300">Turn a selfie into pixel art or shape life’s highest and lowest moments into a personal comic.</p><div className="mt-12 grid gap-6 md:grid-cols-2"><ModuleCard title="PixArt Generator" description="Upload or capture your selfie and turn it into a stylized PixArt portrait." to="/pixart" price={price}/><ModuleCard title="Personal Comic Generator" description="Share your greatest high and low and receive an illustrated story with you as the protagonist." to="/comic" price={price}/></div></section></Shell> }
+function ModuleCard({title,description,to,price}:{title:string;description:string;to:string;price:string}) { return <article className="rounded-3xl border border-slate-800 bg-slate-900 p-8 shadow-2xl shadow-cyan-950/20"><h2 className="text-2xl font-semibold">{title}</h2><p className="mt-3 min-h-14 text-slate-300">{description}</p><Link to={to} className="mt-8 inline-flex rounded-full bg-cyan-300 px-5 py-3 font-semibold text-slate-950">Create for {price}</Link></article> }
+function Login() { const location = useLocation(); const config = useQuery({ queryKey: ['public-config'], queryFn: async () => (await api.get<{data: PublicConfig}>('/api/v1/config/public')).data.data }); const next = new URLSearchParams(location.search).get('next') || '/'; return <Shell><section className="mx-auto max-w-md px-6 py-20"><h1 className="text-3xl font-bold">Sign in to continue</h1><p className="mt-3 text-slate-300">Your selected creation will be kept ready for you.</p>{config.data?.authMode === 'microsoft' ? <a href={`${api.defaults.baseURL}/api/v1/auth/microsoft/start?next=${encodeURIComponent(next)}`} className="mt-8 block rounded-xl bg-white px-4 py-3 text-center font-semibold text-slate-950">Continue with Microsoft</a> : <form className="mt-8 space-y-4"><label className="block text-sm font-medium">Phone number<input type="tel" placeholder="+91 98765 43210" className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 outline-none focus:border-cyan-300" /></label><button type="button" className="w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950">Send OTP</button></form>}</section></Shell> }
+function FormPage({ comic=false }: {comic?:boolean}) { const title = comic ? 'Tell your story' : 'Create your PixArt portrait'; return <Shell><section className="mx-auto max-w-2xl px-6 py-14"><h1 className="text-4xl font-bold">{title}</h1><p className="mt-3 text-slate-300">Your source media stays private and is only processed with your consent.</p><form className="mt-10 space-y-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">{comic && <><label className="block">Biggest high<textarea className="mt-2 min-h-28 w-full rounded-xl border border-slate-700 bg-slate-950 p-3" /></label><label className="block">Biggest low<textarea className="mt-2 min-h-28 w-full rounded-xl border border-slate-700 bg-slate-950 p-3" /></label><p className="text-sm text-amber-200">Do not enter passwords, bank details, government identifiers, exact addresses, or other information you would not want included in your generated story.</p></>}<label className="block">Selfie<input type="file" accept="image/jpeg,image/png,image/webp" capture="user" className="mt-2 block w-full text-sm" /></label><label className="flex gap-3 text-sm text-slate-300"><input type="checkbox" /> I consent to AI processing of this image and information.</label><button type="button" className="rounded-xl bg-cyan-300 px-5 py-3 font-semibold text-slate-950">Continue to checkout</button></form></section></Shell> }
+function Placeholder({title}:{title:string}) { return <Shell><section className="mx-auto max-w-4xl px-6 py-20"><h1 className="text-4xl font-bold">{title}</h1><p className="mt-4 text-slate-300">This area will show your account activity once authentication and payments are connected.</p></section></Shell> }
+export default function App() { return <Routes><Route path="/" element={<Landing/>}/><Route path="/login" element={<Login/>}/><Route path="/pixart" element={<FormPage/>}/><Route path="/comic" element={<FormPage comic/>}/><Route path="/generations" element={<Placeholder title="My creations"/>}/><Route path="/payments" element={<Placeholder title="Payments"/>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes> }
