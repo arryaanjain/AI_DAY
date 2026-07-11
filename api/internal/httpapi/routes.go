@@ -7,6 +7,7 @@ import (
 	"github.com/arryaanjain/AI_DAY/internal/config"
 	"github.com/arryaanjain/AI_DAY/internal/credits"
 	"github.com/arryaanjain/AI_DAY/internal/generation"
+	"github.com/arryaanjain/AI_DAY/internal/payments"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"log/slog"
@@ -21,10 +22,13 @@ type envelope struct {
 
 func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
+	r.Use(cors(cfg.CORSAllowedOrigins))
+
 	r.Use(requestLogger(logger))
 	a := auth.NewService(db)
 	c := credits.New(db)
 	g := generation.New(db)
+	p := payments.New(db)
 	s := assets.New(db, nil, "ai-day", 10*1024*1024, []string{"image/jpeg", "image/png", "image/webp"})
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +52,7 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) http.Ha
 		r.Get("/auth/microsoft/start", auth.AuthModeGuard(cfg.AuthMode, "microsoft"))
 		r.Get("/auth/microsoft/callback", auth.AuthModeGuard(cfg.AuthMode, "microsoft"))
 		r.Get("/credits/balance", creditBalanceHandler(a, c))
+		r.Post("/payments/orders", createPaymentOrder(a, p))
 		r.Post("/assets/upload-url", uploadURLHandler(a, s))
 		r.Post("/generations/pixart", createGenerationHandler("pixel_portrait", a, c, s, g))
 		r.Post("/generations/comic", createGenerationHandler("comic", a, c, s, g))
