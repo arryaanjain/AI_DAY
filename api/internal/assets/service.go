@@ -36,6 +36,15 @@ func New(db *pgxpool.Pool, provider storage.Provider, bucket string, maxBytes in
 
 type UploadIntent struct{ AssetID, URL, ObjectKey string }
 
+type Asset struct {
+	ID           string
+	UserID       string
+	ObjectKey    string
+	OriginalName string
+	MimeType     string
+	Size         int64
+}
+
 func (s *Service) CreateUploadIntent(ctx context.Context, userID, filename, mime string, size int64) (UploadIntent, error) {
 	if filename == "" || size <= 0 || size > s.maxBytes || !s.allowed[mime] {
 		return UploadIntent{}, ErrInvalidAsset
@@ -59,6 +68,26 @@ func (s *Service) CreateUploadIntent(ctx context.Context, userID, filename, mime
 	url, err := s.storage.PresignUpload(ctx, key, mime, size)
 	return UploadIntent{AssetID: id, URL: url, ObjectKey: key}, err
 }
+
+// Get retrieves an asset by ID.
+func (s *Service) Get(ctx context.Context, assetID string) (*Asset, error) {
+	var asset Asset
+	err := s.db.QueryRow(ctx, `
+		SELECT id, user_id, object_key, original_filename, mime_type, size_bytes
+		FROM assets
+		WHERE id = $1
+	`, assetID).Scan(&asset.ID, &asset.UserID, &asset.ObjectKey, &asset.OriginalName, &asset.MimeType, &asset.Size)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInvalidAsset
+		}
+		return nil, err
+	}
+
+	return &asset, nil
+}
+
 func (s *Service) ConfirmOwnership(ctx context.Context, userID, assetID string) error {
 	var found bool
 	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND user_id=$2 AND asset_type='source_selfie')`, assetID, userID).Scan(&found)
