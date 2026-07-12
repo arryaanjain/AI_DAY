@@ -1,0 +1,32 @@
+## Binaries and build output
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+## Go coverage and test artifacts
+coverage.out
+*.coverprofile
+
+## Local environment and secrets
+.env
+.env.*
+!.env.example
+
+## Local storage backends
+storage/
+uploads/
+
+## Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+## Go workspace noise
+*.test
+*.out
