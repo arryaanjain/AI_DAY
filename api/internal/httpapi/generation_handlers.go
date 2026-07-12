@@ -2,11 +2,12 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/http"
+
 	"github.com/arryaanjain/AI_DAY/internal/assets"
 	"github.com/arryaanjain/AI_DAY/internal/auth"
 	"github.com/arryaanjain/AI_DAY/internal/credits"
 	"github.com/arryaanjain/AI_DAY/internal/generation"
-	"net/http"
 )
 
 type generationRequest struct {
