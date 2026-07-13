@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/arryaanjain/AI_DAY/internal/ai"
@@ -79,6 +80,13 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 		r.Post("/payments/orders", createPaymentOrder(cfg, a, p))
 		r.Post("/payments/verify", verifyPaymentHandler(a, p))
 		r.Post("/assets/upload-url", uploadURLHandler(a, s))
+		r.Get("/assets/{id}/download", downloadAssetHandler(s, storageProvider))
+		r.Get("/storage/*", func(w http.ResponseWriter, r *http.Request) {
+			rctx := chi.RouteContext(r.Context())
+			pathPrefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+			fs := http.StripPrefix(pathPrefix, http.FileServer(http.Dir(cfg.FilesystemBaseDir)))
+			fs.ServeHTTP(w, r)
+		})
 		r.Post("/generations/pixart", createGenerationHandler("pixel_portrait", a, c, s, g))
 		r.Post("/generations/comic", createGenerationHandler("comic", a, c, s, g))
 

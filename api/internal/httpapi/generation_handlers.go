@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/arryaanjain/AI_DAY/internal/assets"
@@ -76,6 +77,7 @@ func createGenerationHandler(module string, a *auth.Service, c *credits.Service,
 				errorResponse(w, http.StatusPaymentRequired, "INSUFFICIENT_CREDITS", "A generation credit is required.")
 				return
 			}
+			slog.Error("failed to create generation job", "error", err, "userId", user.ID, "module", module)
 			errorResponse(w, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Unable to create generation job.")
 			return
 		}
