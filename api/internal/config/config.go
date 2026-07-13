@@ -30,9 +30,14 @@ type Config struct {
 	QueueProvider string
 	RedisAddr     string
 	// AI provider settings
-	AIProvider  string
-	OpenAIKey   string
-	OpenAIModel string
+	AIProvider      string
+	OpenAIKey       string
+	OpenAIModel     string
+	OpenAIChatModel string
+	// MSG91 settings
+	MSG91AuthKey    string
+	MSG91TemplateID string
+	MSG91HeaderID   string
 }
 
 func Load() (Config, error) {
@@ -59,6 +64,10 @@ func Load() (Config, error) {
 		AIProvider:              value("AI_PROVIDER", "mock"),
 		OpenAIKey:               value("OPENAI_API_KEY", ""),
 		OpenAIModel:             value("OPENAI_IMAGE_MODEL", "dall-e-3"),
+		OpenAIChatModel:         value("OPENAI_CHAT_MODEL", "gpt-4o"),
+		MSG91AuthKey:            value("MSG91_AUTH_KEY", ""),
+		MSG91TemplateID:         value("MSG91_TEMPLATE_ID", ""),
+		MSG91HeaderID:           value("MSG91_HEADER_ID", ""),
 	}
 
 	if cfg.AuthMode != "phone" && cfg.AuthMode != "microsoft" {

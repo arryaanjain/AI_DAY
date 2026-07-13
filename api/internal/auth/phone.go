@@ -18,13 +18,12 @@ import (
 
 // PhoneAuthService handles phone-based OTP authentication
 type PhoneAuthService struct {
-	db     *pgxpool.Pool
-	logger *slog.Logger
-	// In production, these would be configured from environment variables
+	db          *pgxpool.Pool
+	logger      *slog.Logger
 	msg91APIKey string
 	templateID  string
-	// For demo, we'll use a mock OTP store
-	otpStore map[string]storedOTP
+	headerID    string
+	otpStore    map[string]storedOTP
 }
 
 type storedOTP struct {
@@ -34,13 +33,14 @@ type storedOTP struct {
 }
 
 // NewPhoneAuthService creates a new phone auth service
-func NewPhoneAuthService(db *pgxpool.Pool, logger *slog.Logger) *PhoneAuthService {
+func NewPhoneAuthService(db *pgxpool.Pool, logger *slog.Logger, authKey, templateID, headerID string) *PhoneAuthService {
 	return &PhoneAuthService{
 		db:          db,
 		logger:      logger,
 		otpStore:    make(map[string]storedOTP),
-		msg91APIKey: "", // Would load from env
-		templateID:  "", // Would load from env
+		msg91APIKey: authKey,
+		templateID:  templateID,
+		headerID:    headerID,
 	}
 }
 
