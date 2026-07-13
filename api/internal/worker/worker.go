@@ -2,13 +2,18 @@ package worker
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/arryaanjain/AI_DAY/internal/ai"
 	"github.com/arryaanjain/AI_DAY/internal/assets"
+	"github.com/arryaanjain/AI_DAY/internal/comic"
 	"github.com/arryaanjain/AI_DAY/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -95,7 +100,7 @@ func (w *Worker) processJob(ctx context.Context, jobID string) {
 	// Mark job as processing
 	_, err := w.db.Exec(jobCtx, `
 		UPDATE generation_jobs
-		SET status = 'processing'
+		SET status = 'processing', started_at = NOW()
 		WHERE id = $1
 	`, jobID)
 
@@ -114,6 +119,26 @@ func (w *Worker) processJob(ctx context.Context, jobID string) {
 
 	w.logger.Info("processing job", "jobId", jobID, "module", job.Module)
 
+	if job.Module == "comic" {
+		runner := comic.NewRunner(w.aiProvider, w.storageProvider, w.db, w.logger)
+		state, err := runner.Run(jobCtx, job.ID, job.UserID, job.Input)
+		if err != nil {
+			w.logger.Error("comic pipeline execution failed", "jobId", jobID, "error", err)
+			errorCode := "GENERATION_ERROR"
+			if strings.Contains(err.Error(), "safety review flagged") || strings.Contains(err.Error(), "content is safe") || strings.Contains(err.Error(), "policy") {
+				errorCode = "CONTENT_POLICY_VIOLATION"
+			}
+			w.updateJobError(jobCtx, jobID, errorCode, err.Error())
+			return
+		}
+
+		outputBytes, _ := json.Marshal(state)
+		w.updateJobSuccess(jobCtx, jobID, outputBytes)
+		w.logger.Info("comic job completed successfully", "jobId", jobID)
+		return
+	}
+
+	// Default/PixArt ("pixel_portrait") flow
 	// Parse the input
 	var input map[string]interface{}
 	if err := json.Unmarshal(job.Input, &input); err != nil {
@@ -123,12 +148,19 @@ func (w *Worker) processJob(ctx context.Context, jobID string) {
 	}
 
 	// Get the source asset for context
-	sourceAsset, _ := w.assetService.Get(jobCtx, job.SourceAssetID)
+	var sourceKey string
+	if job.SourceAssetID != "" {
+		sourceAsset, _ := w.assetService.Get(jobCtx, job.SourceAssetID)
+		if sourceAsset != nil {
+			sourceKey = sourceAsset.ObjectKey
+		}
+	}
 
-	// Generate the image
+	// Generate PixArt image using a premium Pixar style prompt
+	dallePrompt := "A premium, highly detailed 3D Pixar-style digital art portrait of the person. Cute animated character style, vibrant colors, soft lighting, professional character design."
 	genResult, err := w.aiProvider.GenerateImage(jobCtx, ai.ImageRequest{
-		Prompt:         fmt.Sprintf("%v", input),
-		SourceAssetURL: sourceAsset.ObjectKey,
+		Prompt:         dallePrompt,
+		SourceAssetURL: sourceKey,
 	})
 
 	if err != nil {
@@ -137,10 +169,57 @@ func (w *Worker) processJob(ctx context.Context, jobID string) {
 		return
 	}
 
-	// Update job with output
+	// Download generated image immediately so DALL-E 3 URL doesn't expire
+	resp, err := http.Get(genResult.URL)
+	if err != nil {
+		w.logger.Error("failed to download generated image", "jobId", jobID, "error", err)
+		w.updateJobError(jobCtx, jobID, "DOWNLOAD_ERROR", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	imgBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		w.logger.Error("failed to read downloaded image bytes", "jobId", jobID, "error", err)
+		w.updateJobError(jobCtx, jobID, "DOWNLOAD_ERROR", err.Error())
+		return
+	}
+
+	// Save to storage
+	objectKey := fmt.Sprintf("users/%s/pixart/%s/image.png", job.UserID, job.ID)
+	err = w.storageProvider.Put(jobCtx, objectKey, imgBytes, "image/png")
+	if err != nil {
+		w.logger.Error("failed to save generated image to storage", "jobId", jobID, "error", err)
+		w.updateJobError(jobCtx, jobID, "STORAGE_ERROR", err.Error())
+		return
+	}
+
+	// Register generated image asset in db
+	assetID, err := generateUUID()
+	if err != nil {
+		w.logger.Error("failed to generate UUID for asset", "jobId", jobID, "error", err)
+		w.updateJobError(jobCtx, jobID, "UUID_ERROR", err.Error())
+		return
+	}
+
+	_, err = w.db.Exec(jobCtx, `
+		INSERT INTO assets(id, user_id, generation_job_id, asset_type, bucket, object_key, mime_type, size_bytes)
+		VALUES($1, $2, $3, 'generated_image', $4, $5, 'image/png', $6)
+	`, assetID, job.UserID, job.ID, "ai-day", objectKey, int64(len(imgBytes)))
+	if err != nil {
+		w.logger.Error("failed to register asset in db", "jobId", jobID, "error", err)
+		w.updateJobError(jobCtx, jobID, "DATABASE_ERROR", err.Error())
+		return
+	}
+
+	// Generate presigned download URL for the final output
+	downloadURL, _ := w.storageProvider.PresignDownload(jobCtx, objectKey)
+
+	// Update job with output containing local downloadURL
 	output := map[string]interface{}{
-		"imageUrl":          genResult.URL,
+		"imageUrl":          downloadURL,
 		"providerRequestId": genResult.ProviderRequestID,
+		"assetId":           assetID,
 	}
 
 	outputJSON, _ := json.Marshal(output)
@@ -195,4 +274,14 @@ type GenerationJob struct {
 	Status        string
 	SourceAssetID string
 	Input         []byte
+}
+
+func generateUUID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
