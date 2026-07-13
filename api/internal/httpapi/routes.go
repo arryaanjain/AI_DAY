@@ -29,7 +29,7 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 
 	r.Use(requestLogger(logger))
 	a := auth.NewService(db)
-	phoneAuth := auth.NewPhoneAuthService(db, logger)
+	phoneAuth := auth.NewPhoneAuthService(db, logger, cfg.MSG91AuthKey, cfg.MSG91TemplateID, cfg.MSG91HeaderID)
 	microsoftAuth := auth.NewMicrosoftAuthService(db, logger)
 	c := credits.New(db)
 	g := generation.New(db)
