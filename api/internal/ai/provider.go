@@ -1,6 +1,6 @@
 package ai
 import "context"
 type ImageRequest struct{Prompt, SourceAssetURL string}
-type ImageResult struct{URL, ProviderRequestID string}
+type ImageResult struct{URL string; Bytes []byte; ProviderRequestID string}
 // Provider isolates OpenAI and future image backends from business workflows.
 type Provider interface{GenerateImage(context.Context,ImageRequest)(ImageResult,error); ModerateText(context.Context,string)(bool,error); GenerateText(ctx context.Context, systemPrompt, userPrompt string) (string, error)}

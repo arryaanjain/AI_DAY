@@ -115,11 +115,13 @@ func (m *MockProvider) GenerateText(ctx context.Context, systemPrompt, userPromp
 	}
 	if strings.Contains(lowerSys, "art direction") || strings.Contains(lowerSys, "visual style") {
 		return `{
+			"styleDescription": "Modern vibrant comic book style",
+			"globalColorPalette": "High contrast cyan and warm amber",
 			"panels": [
-				{"panelNumber": 1, "artDirection": "Neo-noir comic style, heavy shadows, high contrast cyan light"},
-				{"panelNumber": 2, "artDirection": "Detailed code close-up, dramatic red warning highlight"},
-				{"panelNumber": 3, "artDirection": "Warm golden hour light, expressive facial features, pop art style"},
-				{"panelNumber": 4, "artDirection": "Bright comic book style, colorful energy effects in background"}
+				{"panelNumber": 1, "visualDescription": "Heroic portrait framing", "cameraAngle": "Medium shot", "lighting": "Dramatic neon rim lighting"},
+				{"panelNumber": 2, "visualDescription": "Detailed terminal screen close-up", "cameraAngle": "Close-up", "lighting": "Soft blue screen glow"},
+				{"panelNumber": 3, "visualDescription": "Triumphant eureka moment", "cameraAngle": "Low angle", "lighting": "Warm golden sunlight"},
+				{"panelNumber": 4, "visualDescription": "Panoramic success view", "cameraAngle": "Wide shot", "lighting": "Bright natural lighting"}
 			]
 		}`, nil
 	}
