@@ -74,9 +74,8 @@ func main() {
 	// Initialize AI provider
 	var aiProvider ai.Provider
 	if cfg.AIProvider == "openai" && cfg.OpenAIKey != "" {
-		// TODO: Implement OpenAI provider
-		logger.Info("OpenAI provider requested but not yet implemented, using mock")
-		aiProvider = ai.NewMockProvider()
+		aiProvider = ai.NewOpenAIProvider(cfg.OpenAIKey, cfg.OpenAIModel, cfg.OpenAIChatModel)
+		logger.Info("ai provider initialized", "provider", "openai", "chatModel", cfg.OpenAIChatModel, "imageModel", cfg.OpenAIModel)
 	} else {
 		aiProvider = ai.NewMockProvider()
 		logger.Info("ai provider initialized", "provider", "mock")
