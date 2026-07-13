@@ -74,7 +74,17 @@ func main() {
 	// Initialize AI provider
 	var aiProvider ai.Provider
 	if cfg.AIProvider == "openai" && cfg.OpenAIKey != "" {
-		aiProvider = ai.NewOpenAIProvider(cfg.OpenAIKey, cfg.OpenAIModel, cfg.OpenAIChatModel)
+		aiProvider = ai.NewOpenAIProvider(ai.OpenAIConfig{
+			APIKey:             cfg.OpenAIKey,
+			ImageModel:         cfg.OpenAIModel,
+			ChatModel:          cfg.OpenAIChatModel,
+			ImageSize:          cfg.OpenAIImageSize,
+			ImageQuality:       cfg.OpenAIImageQuality,
+			OutputRequirements: cfg.OpenAIOutputRequirements,
+			OrgID:              cfg.OpenAIOrgID,
+			ProjectID:          cfg.OpenAIProjectID,
+			BaseURL:            cfg.OpenAIBaseURL,
+		})
 		logger.Info("ai provider initialized", "provider", "openai", "chatModel", cfg.OpenAIChatModel, "imageModel", cfg.OpenAIModel)
 	} else {
 		aiProvider = ai.NewMockProvider()
