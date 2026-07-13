@@ -8,6 +8,7 @@ import (
 	"github.com/arryaanjain/AI_DAY/internal/auth"
 	"github.com/arryaanjain/AI_DAY/internal/credits"
 	"github.com/arryaanjain/AI_DAY/internal/generation"
+	"github.com/go-chi/chi/v5"
 )
 
 type generationRequest struct {
@@ -21,18 +22,19 @@ type generationRequest struct {
 }
 
 func authenticatedUser(w http.ResponseWriter, r *http.Request, s *auth.Service) (auth.User, bool) {
-	cookie, cookieErr := r.Cookie(auth.SessionCookieName)
-	if cookieErr != nil {
+	token := auth.ExtractToken(r)
+	if token == "" {
 		errorResponse(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required.")
 		return auth.User{}, false
 	}
-	user, err := s.CurrentUser(r.Context(), cookie.Value)
+	user, err := s.CurrentUser(r.Context(), token)
 	if err != nil {
 		errorResponse(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required.")
 		return auth.User{}, false
 	}
 	return user, true
 }
+
 func creditBalanceHandler(a *auth.Service, c *credits.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := authenticatedUser(w, r, a)
@@ -47,6 +49,7 @@ func creditBalanceHandler(a *auth.Service, c *credits.Service) http.HandlerFunc 
 		respond(w, http.StatusOK, map[string]int{"available": balance})
 	}
 }
+
 func createGenerationHandler(module string, a *auth.Service, c *credits.Service, assetsService *assets.Service, g *generation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := authenticatedUser(w, r, a)
@@ -79,6 +82,50 @@ func createGenerationHandler(module string, a *auth.Service, c *credits.Service,
 		respond(w, http.StatusAccepted, map[string]string{"jobId": jobID, "status": "queued"})
 	}
 }
+
+func getGenerationHandler(a *auth.Service, g *generation.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authenticatedUser(w, r, a)
+		if !ok {
+			return
+		}
+		jobID := chi.URLParam(r, "id")
+		if jobID == "" {
+			errorResponse(w, http.StatusBadRequest, "INVALID_REQUEST", "Generation ID is required.")
+			return
+		}
+		job, err := g.Get(r.Context(), jobID, user.ID)
+		if err != nil {
+			if err == generation.ErrJobNotFound {
+				errorResponse(w, http.StatusNotFound, "JOB_NOT_FOUND", "Generation job not found.")
+				return
+			}
+			errorResponse(w, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Unable to fetch generation job.")
+			return
+		}
+		respond(w, http.StatusOK, job)
+	}
+}
+
+func listGenerationsHandler(a *auth.Service, g *generation.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authenticatedUser(w, r, a)
+		if !ok {
+			return
+		}
+		jobs, err := sListUserJobs(g, r, user.ID)
+		if err != nil {
+			errorResponse(w, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Unable to list generation jobs.")
+			return
+		}
+		respond(w, http.StatusOK, jobs)
+	}
+}
+
+func sListUserJobs(g *generation.Service, r *http.Request, userID string) ([]generation.JobDetails, error) {
+	return g.ListUserJobs(r.Context(), userID)
+}
+
 func errorResponse(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

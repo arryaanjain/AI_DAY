@@ -29,7 +29,7 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 
 	r.Use(requestLogger(logger))
 	a := auth.NewService(db)
-	phoneAuth := auth.NewPhoneAuthService(db, logger, cfg.MSG91AuthKey, cfg.MSG91TemplateID, cfg.MSG91HeaderID)
+	phoneAuth := auth.NewPhoneAuthService(db, logger, cfg.DevMode, cfg.MSG91AuthKey, cfg.MSG91TemplateID, cfg.MSG91HeaderID)
 	microsoftAuth := auth.NewMicrosoftAuthService(db, logger)
 	c := credits.New(db)
 	g := generation.New(db)
@@ -74,6 +74,8 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 		}
 
 		r.Get("/credits/balance", creditBalanceHandler(a, c))
+		r.Get("/generations", listGenerationsHandler(a, g))
+		r.Get("/generations/{id}", getGenerationHandler(a, g))
 		r.Post("/payments/orders", createPaymentOrder(a, p))
 		r.Post("/assets/upload-url", uploadURLHandler(a, s))
 		r.Post("/generations/pixart", createGenerationHandler("pixel_portrait", a, c, s, g))
