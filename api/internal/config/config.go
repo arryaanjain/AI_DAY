@@ -34,6 +34,8 @@ type Config struct {
 	OpenAIKey       string
 	OpenAIModel     string
 	OpenAIChatModel string
+	// Dev mode settings
+	DevMode bool
 	// MSG91 settings
 	MSG91AuthKey    string
 	MSG91TemplateID string
@@ -42,6 +44,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
+		DevMode:                 value("DEV_MODE", "true") == "true",
 		HTTPAddress:             value("HTTP_ADDRESS", ":8080"),
 		DatabaseURL:             value("DATABASE_URL", "postgres://ai_day:ai_day@localhost:5432/ai_day?sslmode=disable"),
 		AuthMode:                value("AUTH_MODE", "phone"),
