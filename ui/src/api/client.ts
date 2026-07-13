@@ -143,6 +143,19 @@ export async function createPaymentOrder(module: 'pixel_portrait' | 'comic', qua
   return unwrap<PaymentOrder>(res);
 }
 
+export async function verifyPaymentOrder(
+  razorpayOrderId: string,
+  razorpayPaymentId: string,
+  razorpaySignature: string
+): Promise<{ status: string; message: string }> {
+  const res = await api.post('/api/v1/payments/verify', {
+    razorpayOrderId,
+    razorpayPaymentId,
+    razorpaySignature,
+  });
+  return unwrap<{ status: string; message: string }>(res);
+}
+
 // Error Message Extractor
 export function getApiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {

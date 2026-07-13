@@ -30,6 +30,7 @@ export interface PaymentOrder {
   razorpayKeyId: string;
   amountPaise: number;
   currency: string;
+  creditsPurchased?: number;
 }
 
 export type JobStatus = 'created' | 'queued' | 'processing' | 'completed' | 'failed';

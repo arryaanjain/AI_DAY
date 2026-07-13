@@ -1,10 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createPaymentOrder, formatMoney, getApiErrorMessage } from '../../api/client';
+import { createPaymentOrder, verifyPaymentOrder, formatMoney, getApiErrorMessage } from '../../api/client';
 import type { PaymentOrder, PublicConfig } from '../../api/types';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { ShieldCheck, CheckCircle2, AlertCircle, CreditCard } from 'lucide-react';
+
+declare global {
+  interface Window {
+    Razorpay?: any;
+  }
+}
 
 interface PaymentModalProps {
   isOpen: boolean;
@@ -34,27 +40,87 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const pricePerUnit = config.pricePerGenerationPaise;
 
+  useEffect(() => {
+    if (!window.Razorpay) {
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      document.body.appendChild(script);
+    }
+  }, []);
+
   const createOrderMutation = useMutation({
     mutationFn: () => createPaymentOrder(selectedPkg.module, selectedPkg.quantity),
     onSuccess: (newOrder) => {
       setOrder(newOrder);
-      // In dev mode or with test Razorpay, simulate instant webhook confirmation
-      handleSimulateRazorpayPayment();
+      setErrorMessage(null);
+      handleOpenRazorpayCheckout(newOrder);
     },
     onError: (error) => {
       setErrorMessage(getApiErrorMessage(error));
     },
   });
 
-  const handleSimulateRazorpayPayment = async () => {
+  const handleOpenRazorpayCheckout = (currentOrder: PaymentOrder) => {
+    if (window.Razorpay && currentOrder.razorpayKeyId) {
+      setIsProcessing(true);
+      try {
+        const options = {
+          key: currentOrder.razorpayKeyId,
+          amount: currentOrder.amountPaise,
+          currency: currentOrder.currency || 'INR',
+          name: 'AI Day Platform',
+          description: `${selectedPkg.credits} Generation Credits (${selectedPkg.title})`,
+          order_id: currentOrder.razorpayOrderId,
+          handler: async (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => {
+            setIsProcessing(true);
+            try {
+              await verifyPaymentOrder(
+                response.razorpay_order_id || currentOrder.razorpayOrderId,
+                response.razorpay_payment_id,
+                response.razorpay_signature || ''
+              );
+              await queryClient.refetchQueries({ queryKey: ['credit-balance'] });
+              setIsSuccess(true);
+              if (onPaymentSuccess) onPaymentSuccess();
+            } catch (err) {
+              setErrorMessage(getApiErrorMessage(err));
+            } finally {
+              setIsProcessing(false);
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              setIsProcessing(false);
+            },
+          },
+          theme: {
+            color: '#06b6d4',
+          },
+        };
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+      } catch (err) {
+        handleSimulateRazorpayPayment(currentOrder);
+      }
+    } else {
+      handleSimulateRazorpayPayment(currentOrder);
+    }
+  };
+
+  const handleSimulateRazorpayPayment = async (targetOrder: PaymentOrder) => {
     setIsProcessing(true);
-    // Simulate Razorpay gateway payment processing delay (1.5 seconds)
-    setTimeout(async () => {
-      setIsProcessing(false);
+    try {
+      const mockPaymentId = `pay_mock_${Date.now()}`;
+      await verifyPaymentOrder(targetOrder.razorpayOrderId, mockPaymentId, 'sig_mock_dev');
+      await queryClient.refetchQueries({ queryKey: ['credit-balance'] });
       setIsSuccess(true);
-      await queryClient.invalidateQueries({ queryKey: ['credit-balance'] });
       if (onPaymentSuccess) onPaymentSuccess();
-    }, 1500);
+    } catch (err) {
+      setErrorMessage(getApiErrorMessage(err));
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleClose = () => {

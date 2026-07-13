@@ -17,8 +17,12 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
   const comicOutput = isComic ? (job.output as ComicPipelineState) : undefined;
   const pixartOutput = !isComic ? (job.output as PixartJobOutput) : undefined;
 
-  // Derive asset download URL if available
-  const pdfUrl = comicOutput?.pdfUrl || (comicOutput?.pdfAssetId ? `${apiBase}/storage/users/${job.userId}/comic/${job.id}/story.pdf` : undefined);
+  // Derive asset download URL if available (avoiding file:// scheme URLs)
+  const pdfUrl = comicOutput?.pdfAssetId
+    ? `${apiBase}/api/v1/assets/${comicOutput.pdfAssetId}/download`
+    : (comicOutput?.pdfUrl && !comicOutput.pdfUrl.startsWith('file://')
+        ? (comicOutput.pdfUrl.startsWith('/') ? `${apiBase}${comicOutput.pdfUrl}` : comicOutput.pdfUrl)
+        : `${apiBase}/api/v1/storage/users/${job.userId}/comic/${job.id}/story.pdf`);
   const imageUrl = pixartOutput?.imageUrl || `${apiBase}/storage/users/${job.userId}/pixart/${job.id}/portrait.png`;
 
   return (
