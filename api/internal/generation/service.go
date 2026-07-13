@@ -39,24 +39,26 @@ func (s *Service) CreateWithCredit(ctx context.Context, userID, module, assetID,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var id string
-	err = tx.QueryRow(ctx, `SELECT id::text FROM generation_jobs WHERE user_id=$1 AND idempotency_key=$2`, userID, key).Scan(&id)
+	err = tx.QueryRow(ctx, `SELECT id::text FROM generation_jobs WHERE user_id=$1::uuid AND idempotency_key=$2`, userID, key).Scan(&id)
 	if err == nil {
 		return id, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
+	var dummy string
+	_ = tx.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1::uuid FOR UPDATE`, userID).Scan(&dummy)
 	var balance int
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(quantity),0) FROM credit_ledger WHERE user_id=$1 FOR UPDATE`, userID).Scan(&balance); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(quantity),0) FROM credit_ledger WHERE user_id=$1::uuid`, userID).Scan(&balance); err != nil {
 		return "", err
 	}
 	if balance < 1 {
 		return "", ErrInsufficientCredits
 	}
-	if err = tx.QueryRow(ctx, `INSERT INTO generation_jobs(user_id,module,source_asset_id,idempotency_key,input,status) VALUES($1,$2,$3,$4,$5,'queued') RETURNING id::text`, userID, module, assetID, key, input).Scan(&id); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO generation_jobs(user_id,module,source_asset_id,idempotency_key,input,status) VALUES($1::uuid,$2::module_type,$3::uuid,$4,$5,'queued') RETURNING id::text`, userID, module, assetID, key, input).Scan(&id); err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO credit_ledger(user_id,entry_type,quantity,generation_job_id,idempotency_key,description) VALUES($1,'reservation',-1,$2,$3,'Generation credit reserved')`, userID, id, "reservation:"+key); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO credit_ledger(user_id,entry_type,quantity,generation_job_id,idempotency_key,description) VALUES($1::uuid,'reservation',-1,$2::uuid,$3,'Generation credit reserved')`, userID, id, "reservation:"+key); err != nil {
 		return "", err
 	}
 	return id, tx.Commit(ctx)

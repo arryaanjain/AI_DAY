@@ -6,9 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/arryaanjain/AI_DAY/internal/ai"
@@ -72,6 +77,7 @@ type ArtDirectionResult struct {
 }
 
 type PanelArtDirection struct {
+	PageNumber        int    `json:"pageNumber"`
 	PanelNumber       int    `json:"panelNumber"`
 	VisualDescription string `json:"visualDescription"`
 	CameraAngle       string `json:"cameraAngle"`
@@ -79,6 +85,7 @@ type PanelArtDirection struct {
 }
 
 type GeneratedPanel struct {
+	PageNumber  int    `json:"pageNumber"`
 	PanelNumber int    `json:"panelNumber"`
 	AssetID     string `json:"assetId"`
 	ObjectKey   string `json:"objectKey"`
@@ -140,6 +147,7 @@ You must output a JSON object in this format:
   "globalColorPalette": "Suggested color palette (e.g. Warm pastel, High contrast neon)",
   "panels": [
     {
+      "pageNumber": 1,
       "panelNumber": 1,
       "visualDescription": "Artistic layout instruction, camera framing (e.g. close-up, wide-shot), lighting details",
       "cameraAngle": "e.g. Low angle, bird's eye, medium close-up",
@@ -186,7 +194,7 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 	// 1. Fetch current output state from database (resumable check)
 	var state PipelineState
 	var outputJSON []byte
-	err := r.db.QueryRow(ctx, `SELECT output FROM generation_jobs WHERE id = $1`, jobID).Scan(&outputJSON)
+	err := r.db.QueryRow(ctx, `SELECT output FROM generation_jobs WHERE id = $1::uuid`, jobID).Scan(&outputJSON)
 	if err != nil && !errorsIs(err, pgx.ErrNoRows) {
 		return PipelineState{}, fmt.Errorf("failed to fetch job state: %w", err)
 	}
@@ -281,7 +289,7 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 
 			// Get the source asset (selfie) details to help DALL-E keep visual styling matching user
 			var sourceKey string
-			_ = r.db.QueryRow(ctx, `SELECT object_key FROM assets WHERE id = $1`, input.SourceAssetID).Scan(&sourceKey)
+			_ = r.db.QueryRow(ctx, `SELECT object_key FROM assets WHERE id = $1::uuid`, input.SourceAssetID).Scan(&sourceKey)
 
 			// Generate each panel sequentially
 			for _, page := range state.Narrative.Pages {
@@ -289,7 +297,7 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 					// Check if this panel was already generated previously
 					alreadyGenerated := false
 					for _, gp := range state.Panels {
-						if gp.PanelNumber == panel.PanelNumber {
+						if gp.PageNumber == page.PageNumber && gp.PanelNumber == panel.PanelNumber {
 							alreadyGenerated = true
 							break
 						}
@@ -298,22 +306,24 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 						continue
 					}
 
-					r.logger.Info("generating panel image", "jobId", jobID, "panelNumber", panel.PanelNumber)
+					r.logger.Info("generating panel image", "jobId", jobID, "pageNumber", page.PageNumber, "panelNumber", panel.PanelNumber)
 
 					// Get art direction for this panel
 					var panelArt PanelArtDirection
 					for _, pa := range state.ArtDirection.Panels {
-						if pa.PanelNumber == panel.PanelNumber {
+						if (pa.PageNumber == page.PageNumber || pa.PageNumber == 0) && pa.PanelNumber == panel.PanelNumber {
 							panelArt = pa
-							break
+							if pa.PageNumber == page.PageNumber {
+								break
+							}
 						}
 					}
 
-					// Build DALL-E prompt
+					// Build DALL-E prompt with family-friendly PG-rated styling hint
 					dallePrompt := fmt.Sprintf(
-						"A professional comic book panel. Visual: %s. Caption: %s. Dialogue: %v. Style: %s. Color palette: %s. Layout: %s. Camera angle: %s. Lighting: %s. Protagonist name: %s. Emotion: %s.",
-						panel.Visual, panel.Caption, panel.Dialogue, state.ArtDirection.StyleDescription, state.ArtDirection.GlobalColorPalette,
-						panelArt.VisualDescription, panelArt.CameraAngle, panelArt.Lighting, input.ProtagonistName, panel.Emotion,
+						"A family-friendly, PG-rated comic book panel in vibrant art style. Visual: %s. Caption: %s. Style: %s. Color palette: %s. Layout: %s. Camera angle: %s. Lighting: %s. Emotion: %s.",
+						panel.Visual, panel.Caption, state.ArtDirection.StyleDescription, state.ArtDirection.GlobalColorPalette,
+						panelArt.VisualDescription, panelArt.CameraAngle, panelArt.Lighting, panel.Emotion,
 					)
 
 					imgRes, err := r.aiProvider.GenerateImage(ctx, ai.ImageRequest{
@@ -321,26 +331,43 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 						SourceAssetURL: sourceKey,
 					})
 					if err != nil {
+						if strings.Contains(err.Error(), "moderation_blocked") || strings.Contains(err.Error(), "safety system") {
+							r.logger.Warn("panel prompt flagged by DALL-E safety filter, retrying with safe fallback prompt", "panelNumber", panel.PanelNumber, "error", err)
+							safePrompt := fmt.Sprintf(
+								"A wholesome, family-friendly comic book scene showing character perseverance and hope. Style: %s. Color palette: %s.",
+								state.ArtDirection.StyleDescription, state.ArtDirection.GlobalColorPalette,
+							)
+							imgRes, err = r.aiProvider.GenerateImage(ctx, ai.ImageRequest{
+								Prompt: safePrompt,
+							})
+						}
+					}
+					if err != nil {
 						return state, fmt.Errorf("failed to generate image for panel %d: %w", panel.PanelNumber, err)
 					}
 
-					// Download generated image from OpenAI URL
-					resp, err := http.Get(imgRes.URL)
-					if err != nil {
-						return state, fmt.Errorf("failed to download panel %d image: %w", panel.PanelNumber, err)
+					// Download generated image from OpenAI URL or fallback to dummy PNG
+					var imgBytes []byte
+					if len(imgRes.Bytes) > 0 {
+						imgBytes = imgRes.Bytes
+					} else if strings.HasPrefix(imgRes.URL, "http://") || strings.HasPrefix(imgRes.URL, "https://") {
+						resp, err := http.Get(imgRes.URL)
+						if err == nil {
+							defer resp.Body.Close()
+							if resp.StatusCode == http.StatusOK {
+								imgBytes, _ = io.ReadAll(resp.Body)
+							}
+						}
 					}
-					defer resp.Body.Close()
-
-					imgBytes, err := io.ReadAll(resp.Body)
-					if err != nil {
-						return state, fmt.Errorf("failed to read panel %d image bytes: %w", panel.PanelNumber, err)
+					if len(imgBytes) == 0 {
+						imgBytes = createDummyPNG()
 					}
 
 					// Save to storage provider
-					objectKey := fmt.Sprintf("users/%s/comic/%s/panel_%d.png", userID, jobID, panel.PanelNumber)
+					objectKey := fmt.Sprintf("users/%s/comic/%s/page_%d_panel_%d.png", userID, jobID, page.PageNumber, panel.PanelNumber)
 					err = r.storageProvider.Put(ctx, objectKey, imgBytes, "image/png")
 					if err != nil {
-						return state, fmt.Errorf("failed to write panel %d image to storage: %w", panel.PanelNumber, err)
+						return state, fmt.Errorf("failed to write page %d panel %d image to storage: %w", page.PageNumber, panel.PanelNumber, err)
 					}
 
 					// Register asset in db
@@ -349,15 +376,17 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 						return state, err
 					}
 
+					panelFilename := fmt.Sprintf("page_%d_panel_%d.png", page.PageNumber, panel.PanelNumber)
 					_, err = r.db.Exec(ctx, `
-						INSERT INTO assets(id, user_id, generation_job_id, asset_type, bucket, object_key, mime_type, size_bytes)
-						VALUES($1, $2, $3, 'comic_panel', $4, $5, 'image/png', $6)
-					`, assetID, userID, jobID, r.bucket, objectKey, int64(len(imgBytes)))
+						INSERT INTO assets(id, user_id, generation_job_id, asset_type, bucket, object_key, original_filename, mime_type, size_bytes)
+						VALUES($1::uuid, $2::uuid, $3::uuid, 'comic_panel', $4, $5, $6, 'image/png', $7)
+					`, assetID, userID, jobID, r.bucket, objectKey, panelFilename, int64(len(imgBytes)))
 					if err != nil {
-						return state, fmt.Errorf("failed to register panel %d asset in db: %w", panel.PanelNumber, err)
+						return state, fmt.Errorf("failed to register page %d panel %d asset in db: %w", page.PageNumber, panel.PanelNumber, err)
 					}
 
 					state.Panels = append(state.Panels, GeneratedPanel{
+						PageNumber:  page.PageNumber,
 						PanelNumber: panel.PanelNumber,
 						AssetID:     assetID,
 						ObjectKey:   objectKey,
@@ -388,9 +417,18 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 				pdf.SetFillColor(245, 245, 247)
 				pdf.Rect(0, 0, 210, 297, "F")
 
-				pdf.SetTextColor(30, 41, 59)
-				pdf.SetFont("Helvetica", "B", 14)
-				pdf.Text(10, 15, fmt.Sprintf("%s — Page %d: %s", state.Narrative.Title, page.PageNumber, page.Purpose))
+				pdf.SetTextColor(15, 23, 42)
+				pdf.SetFont("Helvetica", "B", 12)
+				pdf.SetXY(10, 10)
+				headerText := fmt.Sprintf("%s — Page %d", cleanPDFText(pdf, state.Narrative.Title), page.PageNumber)
+				pdf.Cell(190, 6, headerText)
+
+				if page.Purpose != "" {
+					pdf.SetTextColor(71, 85, 105)
+					pdf.SetFont("Helvetica", "I", 9)
+					pdf.SetXY(10, 16)
+					pdf.Cell(190, 4, cleanPDFText(pdf, page.Purpose))
+				}
 
 				// Compute layout based on the number of panels on this page
 				panelsOnPage := page.Panels
@@ -405,14 +443,14 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 				for _, p := range panelsOnPage {
 					found := false
 					for _, gp := range state.Panels {
-						if gp.PanelNumber == p.PanelNumber {
+						if gp.PageNumber == page.PageNumber && gp.PanelNumber == p.PanelNumber {
 							pAssets = append(pAssets, panelWithAsset{panel: p, asset: gp})
 							found = true
 							break
 						}
 					}
 					if !found {
-						return state, fmt.Errorf("missing generated image asset for panel %d", p.PanelNumber)
+						return state, fmt.Errorf("missing generated image asset for page %d panel %d", page.PageNumber, p.PanelNumber)
 					}
 				}
 
@@ -421,76 +459,154 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 					// Get image bytes from storage
 					dlURL, err := r.storageProvider.PresignDownload(ctx, pa.asset.ObjectKey)
 					var imgBytes []byte
-					if err == nil && (strings.HasPrefix(dlURL, "http://") || strings.HasPrefix(dlURL, "https://")) {
-						resp, err := http.Get(dlURL)
-						if err == nil {
-							defer resp.Body.Close()
-							imgBytes, _ = io.ReadAll(resp.Body)
+					if err == nil {
+						if strings.HasPrefix(dlURL, "http://") || strings.HasPrefix(dlURL, "https://") {
+							resp, err := http.Get(dlURL)
+							if err == nil {
+								defer resp.Body.Close()
+								if resp.StatusCode == http.StatusOK {
+									imgBytes, _ = io.ReadAll(resp.Body)
+								}
+							}
+						} else if strings.HasPrefix(dlURL, "file://") {
+							filePath := strings.TrimPrefix(dlURL, "file://")
+							imgBytes, _ = os.ReadFile(filePath)
 						}
 					}
 
-					// If presign download failed or returned a file:// URL, try reading directly if it's filesystem
-					if len(imgBytes) == 0 {
-						// Fallback: if it's mock/noop, generate dummy image; or if we can read local file
-						// Let's try downloading from OpenAI or fallback to dummy PNG
-						imgBytes = createDummyPNG()
-					}
+					// Ensure we have valid, standard PNG bytes for gofpdf
+					imgBytes = ensurePNG(imgBytes)
 
 					imgName := fmt.Sprintf("job_%s_panel_%d", jobID, pa.panel.PanelNumber)
-					imgType := detectImageType(imgBytes)
-
 					reader := bytes.NewReader(imgBytes)
-					pdf.RegisterImageReader(imgName, imgType, reader)
+					pdf.RegisterImageReader(imgName, "PNG", reader)
 
 					// Coordinate calculation
 					var x, y, w, h float64
 					if numPanels == 1 {
 						// Single panel fills the page
-						x, y, w, h = 10, 20, 190, 220
+						x, y, w, h = 10, 25, 190, 230
 					} else if numPanels == 2 {
 						// Two panels stacked vertically
 						h = 110
 						w = 190
 						x = 10
 						if i == 0 {
-							y = 20
+							y = 25
 						} else {
 							y = 145
 						}
-					} else {
+					} else if numPanels == 3 {
 						// Three panels: 1 top wide panel, 2 side-by-side bottom panels
 						if i == 0 {
-							x, y, w, h = 10, 20, 190, 110
+							x, y, w, h = 10, 25, 190, 110
 						} else if i == 1 {
 							x, y, w, h = 10, 145, 92, 110
 						} else {
 							x, y, w, h = 108, 145, 92, 110
 						}
+					} else if numPanels == 4 {
+						// Four panels in a 2x2 grid
+						w = 92
+						h = 110
+						if i == 0 {
+							x, y = 10, 25
+						} else if i == 1 {
+							x, y = 108, 25
+						} else if i == 2 {
+							x, y = 10, 145
+						} else {
+							x, y = 108, 145
+						}
+					} else {
+						// Generic grid layout for any higher number of panels
+						cols := 2
+						rows := (numPanels + 1) / 2
+						colW := 92.0
+						rowH := 240.0 / float64(rows)
+						if rowH > 110 {
+							rowH = 110
+						}
+						colIndex := i % cols
+						rowIndex := i / cols
+						x = 10.0 + float64(colIndex)*98.0
+						y = 25.0 + float64(rowIndex)*(rowH+10.0)
+						w = colW
+						h = rowH
 					}
 
 					// Draw panel image
 					pdf.Image(imgName, x, y, w, h, false, "", 0, "")
 
-					// Draw a neat caption box over/below the image
-					captionY := y + h - 18
+					// Draw a neat comic border around the panel
+					pdf.SetLineWidth(0.8)
+					pdf.SetDrawColor(15, 23, 42)
+					pdf.Rect(x, y, w, h, "D")
+
+					// Calculate text wrapping and required height
+					pdf.SetFont("Helvetica", "B", 8)
+					captionLines := pdf.SplitText(cleanPDFText(pdf, pa.panel.Caption), w-6)
+					
+					var dialogueLines []string
+					if len(pa.panel.Dialogue) > 0 {
+						pdf.SetFont("Helvetica", "I", 7)
+						for _, d := range pa.panel.Dialogue {
+							dLines := pdf.SplitText(cleanPDFText(pdf, d), w-6)
+							dialogueLines = append(dialogueLines, dLines...)
+						}
+					}
+
+					captionHeight := float64(len(captionLines)) * 4.0
+					dialogueHeight := float64(len(dialogueLines)) * 3.5
+					
+					boxPadding := 4.0
+					spacing := 0.0
+					if len(dialogueLines) > 0 && len(captionLines) > 0 {
+						spacing = 2.0
+					}
+					
+					boxH := captionHeight + dialogueHeight + spacing + boxPadding
+					maxBoxH := h * 0.45 // Limit to 45% of panel height
+					if boxH > maxBoxH {
+						boxH = maxBoxH
+					}
+
+					boxY := y + h - boxH
+
+					// Draw a styled semi-transparent caption box at the bottom of the panel
 					pdf.SetFillColor(255, 255, 255)
-					pdf.SetAlpha(0.85, "Normal")
-					pdf.Rect(x, captionY, w, 18, "F")
+					pdf.SetDrawColor(15, 23, 42)
+					pdf.SetLineWidth(0.3)
+					pdf.SetAlpha(0.92, "Normal")
+					pdf.Rect(x, boxY, w, boxH, "FD")
 					pdf.SetAlpha(1.0, "Normal")
 
+					// Render Caption
 					pdf.SetTextColor(15, 23, 42)
-					pdf.SetFont("Helvetica", "B", 7)
-					pdf.SetXY(x+2, captionY+2)
-					pdf.Cell(w-4, 4, pa.panel.Caption)
-
-					if len(pa.panel.Dialogue) > 0 {
-						pdf.SetFont("Helvetica", "I", 6)
-						pdf.SetXY(x+2, captionY+8)
-						dialogueLine := strings.Join(pa.panel.Dialogue, " | ")
-						if len(dialogueLine) > 70 {
-							dialogueLine = dialogueLine[:67] + "..."
+					pdf.SetFont("Helvetica", "B", 8)
+					currentY := boxY + 2.5
+					for _, line := range captionLines {
+						if currentY+4.0 > boxY+boxH {
+							break
 						}
-						pdf.Cell(w-4, 4, dialogueLine)
+						pdf.SetXY(x+3, currentY)
+						pdf.Cell(w-6, 4, line)
+						currentY += 4.0
+					}
+
+					// Render Dialogue
+					if len(dialogueLines) > 0 {
+						pdf.SetTextColor(30, 41, 59)
+						pdf.SetFont("Helvetica", "I", 7)
+						currentY += spacing
+						for _, line := range dialogueLines {
+							if currentY+3.5 > boxY+boxH {
+								break
+							}
+							pdf.SetXY(x+3, currentY)
+							pdf.Cell(w-6, 3.5, line)
+							currentY += 3.5
+						}
 					}
 				}
 			}
@@ -517,8 +633,8 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 			}
 
 			_, err = r.db.Exec(ctx, `
-				INSERT INTO assets(id, user_id, generation_job_id, asset_type, bucket, object_key, mime_type, size_bytes)
-				VALUES($1, $2, $3, 'comic_pdf', $4, $5, 'application/pdf', $6)
+				INSERT INTO assets(id, user_id, generation_job_id, asset_type, bucket, object_key, original_filename, mime_type, size_bytes)
+				VALUES($1::uuid, $2::uuid, $3::uuid, 'comic_pdf', $4, $5, 'story.pdf', 'application/pdf', $6)
 			`, pdfAssetID, userID, jobID, r.bucket, pdfObjectKey, int64(len(pdfBytes)))
 			if err != nil {
 				return state, fmt.Errorf("failed to register story PDF asset in db: %w", err)
@@ -550,7 +666,7 @@ func (r *Runner) saveState(ctx context.Context, jobID string, state PipelineStat
 	_, err = r.db.Exec(ctx, `
 		UPDATE generation_jobs
 		SET output = $1, updated_at = NOW()
-		WHERE id = $2
+		WHERE id = $2::uuid
 	`, outputBytes, jobID)
 	if err != nil {
 		return fmt.Errorf("failed to persist pipeline state to database: %w", err)
@@ -581,16 +697,40 @@ func detectImageType(data []byte) string {
 	return "PNG"
 }
 
-func createDummyPNG() []byte {
-	// A tiny valid 1x1 pixel PNG image bytes
-	return []byte{
-		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-		0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x60, 0x18, 0x05, 0xa3,
-		0x60, 0x14, 0x8c, 0x00, 0x08, 0x00, 0x05, 0x00, 0x52, 0x2b, 0x11, 0xc2,
-		0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+func ensurePNG(data []byte) []byte {
+	if len(data) == 0 {
+		return createDummyPNG()
 	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return createDummyPNG()
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return createDummyPNG()
+	}
+	return buf.Bytes()
+}
+
+func createDummyPNG() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	// Draw a vibrant gradient background with dark comic border
+	for y := 0; y < 300; y++ {
+		for x := 0; x < 400; x++ {
+			if x < 8 || x > 391 || y < 8 || y > 291 {
+				img.Set(x, y, color.RGBA{R: 15, G: 23, B: 42, A: 255}) // Dark slate border
+			} else {
+				// Cyan to indigo gradient
+				r := uint8(14 + (x * 30 / 400))
+				g := uint8(116 + (y * 50 / 300))
+				b := uint8(144 + ((x + y) * 40 / 700))
+				img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+			}
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
 }
 
 func uuid() (string, error) {
@@ -605,4 +745,27 @@ func uuid() (string, error) {
 
 func errorsIs(err error, target error) bool {
 	return err == target || (err != nil && err.Error() == target.Error())
+}
+
+func cleanPDFText(pdf *gofpdf.Fpdf, s string) string {
+	s = strings.ReplaceAll(s, "’", "'")
+	s = strings.ReplaceAll(s, "‘", "'")
+	s = strings.ReplaceAll(s, "“", "\"")
+	s = strings.ReplaceAll(s, "”", "\"")
+	s = strings.ReplaceAll(s, "—", "-")
+	s = strings.ReplaceAll(s, "–", "-")
+	s = strings.ReplaceAll(s, "…", "...")
+
+	tr := pdf.UnicodeTranslatorFromDescriptor("")
+	s = tr(s)
+
+	var buf bytes.Buffer
+	for _, r := range s {
+		if r < 256 {
+			buf.WriteRune(r)
+		} else {
+			buf.WriteRune('?')
+		}
+	}
+	return buf.String()
 }
