@@ -10,10 +10,7 @@ import (
 	"image/color"
 	_ "image/jpeg"
 	"image/png"
-	"io"
 	"log/slog"
-	"net/http"
-	"os"
 	"strings"
 
 	"github.com/arryaanjain/AI_DAY/internal/ai"
@@ -346,18 +343,10 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 						return state, fmt.Errorf("failed to generate image for panel %d: %w", panel.PanelNumber, err)
 					}
 
-					// Download generated image from OpenAI URL or fallback to dummy PNG
+					// Use raw bytes from b64_json response (populated by OpenAI provider)
 					var imgBytes []byte
 					if len(imgRes.Bytes) > 0 {
 						imgBytes = imgRes.Bytes
-					} else if strings.HasPrefix(imgRes.URL, "http://") || strings.HasPrefix(imgRes.URL, "https://") {
-						resp, err := http.Get(imgRes.URL)
-						if err == nil {
-							defer resp.Body.Close()
-							if resp.StatusCode == http.StatusOK {
-								imgBytes, _ = io.ReadAll(resp.Body)
-							}
-						}
 					}
 					if len(imgBytes) == 0 {
 						imgBytes = createDummyPNG()
@@ -456,28 +445,21 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 
 				// Render panels using our dynamic layouts
 				for i, pa := range pAssets {
-					// Get image bytes from storage
-					dlURL, err := r.storageProvider.PresignDownload(ctx, pa.asset.ObjectKey)
-					var imgBytes []byte
-					if err == nil {
-						if strings.HasPrefix(dlURL, "http://") || strings.HasPrefix(dlURL, "https://") {
-							resp, err := http.Get(dlURL)
-							if err == nil {
-								defer resp.Body.Close()
-								if resp.StatusCode == http.StatusOK {
-									imgBytes, _ = io.ReadAll(resp.Body)
-								}
-							}
-						} else if strings.HasPrefix(dlURL, "file://") {
-							filePath := strings.TrimPrefix(dlURL, "file://")
-							imgBytes, _ = os.ReadFile(filePath)
-						}
+					// Load image bytes directly from storage — avoids defer-in-loop and
+					// file:// URL parsing bugs that caused wrong images to be reused.
+					imgBytes, err := r.storageProvider.Get(ctx, pa.asset.ObjectKey)
+					if err != nil || len(imgBytes) == 0 {
+						r.logger.Warn("could not load panel image from storage, using placeholder",
+							"objectKey", pa.asset.ObjectKey, "error", err)
+						imgBytes = createDummyPNG()
 					}
 
 					// Ensure we have valid, standard PNG bytes for gofpdf
 					imgBytes = ensurePNG(imgBytes)
 
-					imgName := fmt.Sprintf("job_%s_panel_%d", jobID, pa.panel.PanelNumber)
+					// Include pageNumber in the key so gofpdf doesn't reuse a cached image
+					// from a different page that happened to have the same panelNumber.
+					imgName := fmt.Sprintf("job_%s_page_%d_panel_%d", jobID, page.PageNumber, pa.panel.PanelNumber)
 					reader := bytes.NewReader(imgBytes)
 					pdf.RegisterImageReader(imgName, "PNG", reader)
 
