@@ -89,6 +89,7 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 		})
 		r.Post("/generations/pixart", createGenerationHandler("pixel_portrait", a, c, s, g))
 		r.Post("/generations/comic", createGenerationHandler("comic", a, c, s, g))
+		r.Post("/generations/{id}/retry", retryGenerationHandler(a, g))
 
 		// Admin routes
 		r.Route("/admin", func(r chi.Router) {

@@ -133,3 +133,30 @@ func errorResponse(w http.ResponseWriter, status int, code, message string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": message, "details": map[string]any{}}, "requestId": ""})
 }
+
+func retryGenerationHandler(a *auth.Service, g *generation.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authenticatedUser(w, r, a)
+		if !ok {
+			return
+		}
+		jobID := chi.URLParam(r, "id")
+		if jobID == "" {
+			errorResponse(w, http.StatusBadRequest, "INVALID_REQUEST", "Generation ID is required.")
+			return
+		}
+		if err := g.Retry(r.Context(), jobID, user.ID); err != nil {
+			switch err {
+			case generation.ErrJobNotFound:
+				errorResponse(w, http.StatusNotFound, "JOB_NOT_FOUND", "Generation job not found.")
+			case generation.ErrJobNotRetryable:
+				errorResponse(w, http.StatusConflict, "JOB_NOT_RETRYABLE", "Only failed jobs can be retried.")
+			default:
+				slog.Error("failed to retry generation job", "error", err, "jobId", jobID)
+				errorResponse(w, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Unable to retry generation job.")
+			}
+			return
+		}
+		respond(w, http.StatusOK, map[string]string{"jobId": jobID, "status": "queued"})
+	}
+}

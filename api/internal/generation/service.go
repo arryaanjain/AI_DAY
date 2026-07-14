@@ -12,6 +12,7 @@ import (
 
 var ErrInsufficientCredits = errors.New("insufficient credits")
 var ErrJobNotFound = errors.New("generation job not found")
+var ErrJobNotRetryable = errors.New("only failed jobs can be retried")
 
 type JobDetails struct {
 	ID            string                 `json:"id"`
@@ -122,4 +123,34 @@ func (s *Service) ListUserJobs(ctx context.Context, userID string) ([]JobDetails
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
+}
+
+// Retry resets a failed job back to 'queued' so the worker can resume from the
+// last persisted pipeline stage. No credits are deducted – the original
+// reservation already covers this execution attempt.
+func (s *Service) Retry(ctx context.Context, jobID, userID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE generation_jobs
+		SET    status        = 'queued',
+		       error_code    = NULL,
+		       error_message = NULL,
+		       completed_at  = NULL,
+		       updated_at    = NOW()
+		WHERE  id      = $1
+		AND    user_id = $2
+		AND    status  = 'failed'
+	`, jobID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// Either not found or not in a failed state.
+		var status string
+		err = s.db.QueryRow(ctx, `SELECT status FROM generation_jobs WHERE id=$1 AND user_id=$2`, jobID, userID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrJobNotFound
+		}
+		return ErrJobNotRetryable
+	}
+	return nil
 }
