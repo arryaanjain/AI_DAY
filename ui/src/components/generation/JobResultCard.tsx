@@ -23,7 +23,16 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
     : (comicOutput?.pdfUrl && !comicOutput.pdfUrl.startsWith('file://')
         ? (comicOutput.pdfUrl.startsWith('/') ? `${apiBase}${comicOutput.pdfUrl}` : comicOutput.pdfUrl)
         : `${apiBase}/api/v1/storage/users/${job.userId}/comic/${job.id}/story.pdf`);
-  const imageUrl = pixartOutput?.imageUrl || `${apiBase}/storage/users/${job.userId}/pixart/${job.id}/portrait.png`;
+
+  const downloadUrl = pixartOutput?.assetId
+    ? `${apiBase}/api/v1/assets/${pixartOutput.assetId}/download`
+    : `${apiBase}/api/v1/storage/users/${job.userId}/pixart/${job.id}/image.png`;
+
+  const imageUrl = pixartOutput?.assetId
+    ? `${apiBase}/api/v1/assets/${pixartOutput.assetId}/download`
+    : (pixartOutput?.imageUrl && !pixartOutput.imageUrl.startsWith('file://')
+        ? (pixartOutput.imageUrl.startsWith('/') ? `${apiBase}${pixartOutput.imageUrl}` : pixartOutput.imageUrl)
+        : `${apiBase}/api/v1/storage/users/${job.userId}/pixart/${job.id}/image.png`);
 
   return (
     <div className="rounded-[2rem] border border-cyan-300/30 bg-gradient-to-b from-cyan-950/20 to-slate-900/60 p-6 backdrop-blur-xl space-y-6 shadow-2xl shadow-cyan-950/40 animate-in fade-in zoom-in-95 duration-300">
@@ -62,7 +71,7 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
             />
           </div>
           <div className="flex flex-wrap gap-3 pt-2">
-            <a href={imageUrl} target="_blank" rel="noopener noreferrer" download={`pixart-${job.id}.png`}>
+            <a href={downloadUrl} target="_blank" rel="noopener noreferrer" download={`pixart-${job.id}.png`}>
               <Button size="md" leftIcon={<Download className="h-4 w-4" />}>
                 Download HD Image
               </Button>

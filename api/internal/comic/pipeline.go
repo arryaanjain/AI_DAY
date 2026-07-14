@@ -409,7 +409,7 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 				pdf.SetTextColor(15, 23, 42)
 				pdf.SetFont("Helvetica", "B", 12)
 				pdf.SetXY(10, 10)
-				headerText := fmt.Sprintf("%s — Page %d", cleanPDFText(pdf, state.Narrative.Title), page.PageNumber)
+				headerText := cleanPDFText(pdf, fmt.Sprintf("%s - Page %d", state.Narrative.Title, page.PageNumber))
 				pdf.Cell(190, 6, headerText)
 
 				if page.Purpose != "" {
