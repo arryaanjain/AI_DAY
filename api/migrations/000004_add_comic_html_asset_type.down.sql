@@ -1,0 +1,1 @@
+-- Note: PostgreSQL enum values cannot be easily removed without dropping and recreating the type.

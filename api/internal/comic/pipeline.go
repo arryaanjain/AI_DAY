@@ -27,6 +27,7 @@ const (
 	SafetyReview     Stage = "safety_review"
 	ArtDirection     Stage = "art_direction"
 	PanelGeneration  Stage = "panel_generation"
+	HTMLComposition  Stage = "html_composition"
 	PDFComposition   Stage = "pdf_composition"
 )
 
@@ -58,6 +59,8 @@ type PipelineState struct {
 	Safety       *SafetyResult        `json:"safety,omitempty"`
 	ArtDirection *ArtDirectionResult  `json:"artDirection,omitempty"`
 	Panels       []GeneratedPanel     `json:"panels,omitempty"`
+	HTMLAssetID  string               `json:"htmlAssetId,omitempty"`
+	HTMLUrl      string               `json:"htmlUrl,omitempty"`
 	PDFAssetID   string               `json:"pdfAssetId,omitempty"`
 	PDFUrl       string               `json:"pdfUrl,omitempty"`
 }
@@ -153,6 +156,15 @@ You must output a JSON object in this format:
   ]
 }
 Do not include markdown wrappers like ` + "```json" + `.`
+
+const HTMLCompositionSystemPrompt = `You are an expert web comic frontend designer.
+Your task is to craft a modern, responsive, visually stunning single-file HTML web comic page with embedded CSS based on the provided story script and panel image asset links.
+The HTML must feature a sleek dark mode theme, glassmorphic page containers, styled speech bubbles for character dialogues, clean narrative caption boxes, and a responsive grid layout.
+
+Rules:
+1. Output ONLY valid, complete HTML starting with <!DOCTYPE html> and ending with </html>.
+2. Include internal <style> tag containing modern CSS (Flexbox/Grid, Inter/Roboto fonts via Google Fonts, custom speech bubble arrows, micro-animations).
+3. Do not include markdown code block syntax like ` + "```html" + ` or ` + "```" + `. Output clean raw HTML string.`
 
 // Runner orchestrates the multi-stage comic pipeline.
 type Runner struct {
@@ -388,6 +400,87 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 				}
 			}
 
+			state.Stage = HTMLComposition
+			if err := r.saveState(ctx, jobID, state); err != nil {
+				return state, err
+			}
+
+		case HTMLComposition:
+			r.logger.Info("stage: HTML composition", "jobId", jobID)
+
+			var pagesData []PageHTMLData
+			for _, page := range state.Narrative.Pages {
+				var pDataList []PanelHTMLData
+				for _, panel := range page.Panels {
+					var assetID string
+					for _, gp := range state.Panels {
+						if gp.PageNumber == page.PageNumber && gp.PanelNumber == panel.PanelNumber {
+							assetID = gp.AssetID
+							break
+						}
+					}
+					pDataList = append(pDataList, PanelHTMLData{
+						PageNumber:  page.PageNumber,
+						PanelNumber: panel.PanelNumber,
+						Caption:     panel.Caption,
+						Dialogue:    panel.Dialogue,
+						Emotion:     panel.Emotion,
+						ImageURL:    fmt.Sprintf("/api/v1/assets/%s/download", assetID),
+					})
+				}
+				pagesData = append(pagesData, PageHTMLData{
+					PageNumber: page.PageNumber,
+					Purpose:    page.Purpose,
+					Panels:     pDataList,
+				})
+			}
+
+			promptPayload := map[string]any{
+				"title":        state.Narrative.Title,
+				"theme":        state.Narrative.Theme,
+				"logline":      state.Narrative.Logline,
+				"style":        state.ArtDirection.StyleDescription,
+				"colorPalette": state.ArtDirection.GlobalColorPalette,
+				"pages":        pagesData,
+			}
+
+			payloadBytes, _ := json.MarshalIndent(promptPayload, "", "  ")
+			userPrompt := fmt.Sprintf("Generate a complete single-file HTML responsive web comic for this script and asset manifest:\n\n%s", string(payloadBytes))
+
+			htmlContent, err := r.aiProvider.GenerateText(ctx, HTMLCompositionSystemPrompt, userPrompt)
+			if err != nil {
+				r.logger.Warn("HTML agent generation failed, using clean structured HTML fallback template", "jobId", jobID, "error", err)
+				htmlContent = buildFallbackHTMLComic(state.Narrative, pagesData)
+			} else {
+				htmlContent = cleanHTMLString(htmlContent)
+				if !strings.Contains(strings.ToLower(htmlContent), "<!doctype html>") && !strings.Contains(strings.ToLower(htmlContent), "<html") {
+					htmlContent = buildFallbackHTMLComic(state.Narrative, pagesData)
+				}
+			}
+
+			htmlObjectKey := fmt.Sprintf("users/%s/comic/%s/story.html", userID, jobID)
+			err = r.storageProvider.Put(ctx, htmlObjectKey, []byte(htmlContent), "text/html")
+			if err != nil {
+				return state, fmt.Errorf("failed to write story HTML to storage: %w", err)
+			}
+
+			htmlAssetID, err := uuid()
+			if err != nil {
+				return state, err
+			}
+
+			_, err = r.db.Exec(ctx, `
+				INSERT INTO assets(id, user_id, generation_job_id, asset_type, bucket, object_key, original_filename, mime_type, size_bytes)
+				VALUES($1::uuid, $2::uuid, $3::uuid, 'comic_html', $4, $5, 'story.html', 'text/html', $6)
+			`, htmlAssetID, userID, jobID, r.bucket, htmlObjectKey, int64(len(htmlContent)))
+			if err != nil {
+				return state, fmt.Errorf("failed to register story HTML asset in db: %w", err)
+			}
+
+			htmlDownloadURL, _ := r.storageProvider.PresignDownload(ctx, htmlObjectKey)
+			state.HTMLAssetID = htmlAssetID
+			state.HTMLUrl = htmlDownloadURL
+
 			state.Stage = PDFComposition
 			if err := r.saveState(ctx, jobID, state); err != nil {
 				return state, err
@@ -409,7 +502,7 @@ func (r *Runner) Run(ctx context.Context, jobID, userID string, inputBytes []byt
 				pdf.SetTextColor(15, 23, 42)
 				pdf.SetFont("Helvetica", "B", 12)
 				pdf.SetXY(10, 10)
-				headerText := fmt.Sprintf("%s — Page %d", cleanPDFText(pdf, state.Narrative.Title), page.PageNumber)
+				headerText := cleanPDFText(pdf, fmt.Sprintf("%s - Page %d", state.Narrative.Title, page.PageNumber))
 				pdf.Cell(190, 6, headerText)
 
 				if page.Purpose != "" {
@@ -750,4 +843,86 @@ func cleanPDFText(pdf *gofpdf.Fpdf, s string) string {
 		}
 	}
 	return buf.String()
+}
+
+func cleanHTMLString(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```html") {
+		s = strings.TrimPrefix(s, "```html")
+	} else if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```")
+	}
+	if strings.HasSuffix(s, "```") {
+		s = strings.TrimSuffix(s, "```")
+	}
+	return strings.TrimSpace(s)
+}
+
+type PanelHTMLData struct {
+	PageNumber  int      `json:"pageNumber"`
+	PanelNumber int      `json:"panelNumber"`
+	Caption     string   `json:"caption"`
+	Dialogue    []string `json:"dialogue"`
+	Emotion     string   `json:"emotion"`
+	ImageURL    string   `json:"imageUrl"`
+}
+
+type PageHTMLData struct {
+	PageNumber int             `json:"pageNumber"`
+	Purpose    string          `json:"purpose"`
+	Panels     []PanelHTMLData `json:"panels"`
+}
+
+func buildFallbackHTMLComic(n *Narrative, pages []PageHTMLData) string {
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
+	b.WriteString("<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n")
+	fmt.Fprintf(&b, "<title>%s - AI Comic Storybook</title>\n", htmlEscape(n.Title))
+	b.WriteString("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n")
+	b.WriteString("<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n")
+	b.WriteString("<link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap\" rel=\"stylesheet\">\n")
+	b.WriteString("<style>\n")
+	b.WriteString("  * { box-sizing: border-box; margin: 0; padding: 0; }\n")
+	b.WriteString("  body { background-color: #0b0f19; color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif; padding: 2rem 1rem; line-height: 1.5; }\n")
+	b.WriteString("  .container { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 2.5rem; }\n")
+	b.WriteString("  header { text-align: center; background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.7)); padding: 2.5rem; border-radius: 1.5rem; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }\n")
+	b.WriteString("  h1 { font-size: 2.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.5rem; }\n")
+	b.WriteString("  .theme { font-size: 0.875rem; color: #38bdf8; text-transform: uppercase; font-weight: 700; tracking: 0.05em; }\n")
+	b.WriteString("  .logline { font-style: italic; color: #94a3b8; font-size: 1rem; margin-top: 0.5rem; }\n")
+	b.WriteString("  .page-card { background: rgba(15, 23, 42, 0.7); border-radius: 1.5rem; border: 1px solid rgba(255,255,255,0.08); padding: 1.75rem; display: flex; flex-direction: column; gap: 1.5rem; backdrop-filter: blur(12px); }\n")
+	b.WriteString("  .page-title { font-size: 1.25rem; font-weight: 700; color: #38bdf8; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; }\n")
+	b.WriteString("  .panels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }\n")
+	b.WriteString("  .panel-card { background: #020617; border-radius: 1.25rem; border: 1px solid rgba(255,255,255,0.1); overflow: hidden; display: flex; flex-direction: column; transition: transform 0.2s ease; }\n")
+	b.WriteString("  .panel-card:hover { transform: translateY(-3px); }\n")
+	b.WriteString("  .panel-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; border-bottom: 1px solid rgba(255,255,255,0.1); }\n")
+	b.WriteString("  .panel-body { padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; flex: 1; }\n")
+	b.WriteString("  .caption { background: rgba(56, 189, 248, 0.1); border-left: 3px solid #38bdf8; padding: 0.6rem 0.8rem; font-size: 0.875rem; font-weight: 600; color: #e2e8f0; border-radius: 0 0.5rem 0.5rem 0; }\n")
+	b.WriteString("  .dialogue-box { background: rgba(255, 255, 255, 0.05); border-radius: 0.75rem; padding: 0.6rem 0.8rem; font-size: 0.825rem; color: #cbd5e1; border: 1px solid rgba(255,255,255,0.05); }\n")
+	b.WriteString("  footer { text-align: center; color: #64748b; font-size: 0.875rem; margin-top: 1rem; }\n")
+	b.WriteString("</style>\n</head>\n<body>\n<div class=\"container\">\n")
+	fmt.Fprintf(&b, "  <header>\n    <h1>%s</h1>\n    <p class=\"theme\">Theme: %s</p>\n    <p class=\"logline\">\"%s\"</p>\n  </header>\n", htmlEscape(n.Title), htmlEscape(n.Theme), htmlEscape(n.Logline))
+	for _, page := range pages {
+		fmt.Fprintf(&b, "  <div class=\"page-card\">\n    <div class=\"page-title\"><span>Page %d</span><span style=\"font-size: 0.85rem; font-weight: 400; color: #94a3b8;\">%s</span></div>\n    <div class=\"panels-grid\">\n", page.PageNumber, htmlEscape(page.Purpose))
+		for _, p := range page.Panels {
+			fmt.Fprintf(&b, "      <div class=\"panel-card\">\n        <img src=\"%s\" alt=\"Panel %d\" class=\"panel-img\" />\n        <div class=\"panel-body\">\n", p.ImageURL, p.PanelNumber)
+			if p.Caption != "" {
+				fmt.Fprintf(&b, "          <div class=\"caption\">%s</div>\n", htmlEscape(p.Caption))
+			}
+			for _, d := range p.Dialogue {
+				fmt.Fprintf(&b, "          <div class=\"dialogue-box\">%s</div>\n", htmlEscape(d))
+			}
+			b.WriteString("        </div>\n      </div>\n")
+		}
+		b.WriteString("    </div>\n  </div>\n")
+	}
+	b.WriteString("  <footer>Generated by AI Comic Agent Storybook Pipeline</footer>\n</div>\n</body>\n</html>")
+	return b.String()
+}
+
+func htmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
 }

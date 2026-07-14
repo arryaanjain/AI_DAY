@@ -63,10 +63,12 @@ export interface ComicNarrative {
 }
 
 export interface ComicPipelineState {
-  stage: 'narrative_planner' | 'safety_review' | 'art_direction' | 'panel_generation' | 'pdf_composition';
+  stage: 'narrative_planner' | 'safety_review' | 'art_direction' | 'panel_generation' | 'html_composition' | 'pdf_composition';
   narrative?: ComicNarrative;
   safety?: { safe: boolean; reason: string };
   panels?: GeneratedPanel[];
+  htmlAssetId?: string;
+  htmlUrl?: string;
   pdfAssetId?: string;
   pdfUrl?: string;
 }

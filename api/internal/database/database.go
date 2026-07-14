@@ -22,5 +22,9 @@ func New(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 		pool.Close()
 		return nil, err
 	}
+
+	// Auto-migrate schema enums if required
+	_, _ = pool.Exec(ctx, `ALTER TYPE asset_type ADD VALUE IF NOT EXISTS 'comic_html';`)
+
 	return pool, nil
 }

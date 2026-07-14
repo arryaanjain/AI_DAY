@@ -1,7 +1,7 @@
 import React from 'react';
 import type { GenerationJob, ComicPipelineState, PixartJobOutput } from '../../api/types';
 import { Button } from '../ui/Button';
-import { Download, CheckCircle2, BookOpen, ExternalLink, RefreshCw } from 'lucide-react';
+import { Download, CheckCircle2, BookOpen, ExternalLink, RefreshCw, Code } from 'lucide-react';
 
 interface JobResultCardProps {
   job: GenerationJob;
@@ -23,7 +23,22 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
     : (comicOutput?.pdfUrl && !comicOutput.pdfUrl.startsWith('file://')
         ? (comicOutput.pdfUrl.startsWith('/') ? `${apiBase}${comicOutput.pdfUrl}` : comicOutput.pdfUrl)
         : `${apiBase}/api/v1/storage/users/${job.userId}/comic/${job.id}/story.pdf`);
-  const imageUrl = pixartOutput?.imageUrl || `${apiBase}/storage/users/${job.userId}/pixart/${job.id}/portrait.png`;
+
+  const htmlUrl = comicOutput?.htmlAssetId
+    ? `${apiBase}/api/v1/assets/${comicOutput.htmlAssetId}/download`
+    : (comicOutput?.htmlUrl && !comicOutput.htmlUrl.startsWith('file://')
+        ? (comicOutput.htmlUrl.startsWith('/') ? `${apiBase}${comicOutput.htmlUrl}` : comicOutput.htmlUrl)
+        : `${apiBase}/api/v1/storage/users/${job.userId}/comic/${job.id}/story.html`);
+
+  const downloadUrl = pixartOutput?.assetId
+    ? `${apiBase}/api/v1/assets/${pixartOutput.assetId}/download`
+    : `${apiBase}/api/v1/storage/users/${job.userId}/pixart/${job.id}/image.png`;
+
+  const imageUrl = pixartOutput?.assetId
+    ? `${apiBase}/api/v1/assets/${pixartOutput.assetId}/download`
+    : (pixartOutput?.imageUrl && !pixartOutput.imageUrl.startsWith('file://')
+        ? (pixartOutput.imageUrl.startsWith('/') ? `${apiBase}${pixartOutput.imageUrl}` : pixartOutput.imageUrl)
+        : `${apiBase}/api/v1/storage/users/${job.userId}/pixart/${job.id}/image.png`);
 
   return (
     <div className="rounded-[2rem] border border-cyan-300/30 bg-gradient-to-b from-cyan-950/20 to-slate-900/60 p-6 backdrop-blur-xl space-y-6 shadow-2xl shadow-cyan-950/40 animate-in fade-in zoom-in-95 duration-300">
@@ -62,7 +77,7 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
             />
           </div>
           <div className="flex flex-wrap gap-3 pt-2">
-            <a href={imageUrl} target="_blank" rel="noopener noreferrer" download={`pixart-${job.id}.png`}>
+            <a href={downloadUrl} target="_blank" rel="noopener noreferrer" download={`pixart-${job.id}.png`}>
               <Button size="md" leftIcon={<Download className="h-4 w-4" />}>
                 Download HD Image
               </Button>
@@ -117,13 +132,20 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
 
           <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
             <div className="text-xs text-slate-400">
-              PDF Storybook formatted with print-ready resolution and dialogue captions.
+              Generated in responsive Web Comic (HTML) and print-ready PDF formats.
             </div>
-            <a href={pdfUrl || '#'} target="_blank" rel="noopener noreferrer" download={`comic-storybook-${job.id}.pdf`}>
-              <Button size="lg" leftIcon={<Download className="h-5 w-5" />} rightIcon={<ExternalLink className="h-4 w-4" />}>
-                Download PDF Storybook
-              </Button>
-            </a>
+            <div className="flex flex-wrap items-center gap-3">
+              <a href={htmlUrl || '#'} target="_blank" rel="noopener noreferrer" download={`web-comic-${job.id}.html`}>
+                <Button variant="outline" size="md" leftIcon={<Code className="h-4 w-4" />} rightIcon={<ExternalLink className="h-3.5 w-3.5" />}>
+                  Web Comic (HTML)
+                </Button>
+              </a>
+              <a href={pdfUrl || '#'} target="_blank" rel="noopener noreferrer" download={`comic-storybook-${job.id}.pdf`}>
+                <Button size="md" leftIcon={<Download className="h-4 w-4" />} rightIcon={<ExternalLink className="h-3.5 w-3.5" />}>
+                  Download PDF
+                </Button>
+              </a>
+            </div>
           </div>
         </div>
       )}
