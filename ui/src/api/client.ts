@@ -132,6 +132,11 @@ export async function fetchGenerationJob(jobId: string): Promise<GenerationJob> 
   return unwrap<GenerationJob>(res);
 }
 
+export async function retryGenerationJob(jobId: string): Promise<{ jobId: string; status: string }> {
+  const res = await api.post(`/api/v1/generations/${jobId}/retry`);
+  return unwrap<{ jobId: string; status: string }>(res);
+}
+
 export async function fetchGenerationJobs(): Promise<GenerationJob[]> {
   const res = await api.get('/api/v1/generations');
   return unwrap<GenerationJob[]>(res);

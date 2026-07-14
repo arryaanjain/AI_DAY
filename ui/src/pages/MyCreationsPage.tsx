@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { PublicConfig, CurrentUser, GenerationJob } from '../api/types';
-import { fetchGenerationJobs } from '../api/client';
+import { fetchGenerationJobs, retryGenerationJob, getApiErrorMessage } from '../api/client';
 import { Shell } from '../components/layout/Shell';
 import { GenerationCard } from '../components/generation/GenerationCard';
 import { JobResultCard } from '../components/generation/JobResultCard';
 import { JobProgress } from '../components/generation/JobProgress';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
-import { Layers, Sparkles, BookOpen, Plus, RefreshCw, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Layers, Sparkles, BookOpen, Plus, RefreshCw, Loader2, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 interface MyCreationsPageProps {
@@ -18,8 +18,10 @@ interface MyCreationsPageProps {
 }
 
 export const MyCreationsPage: React.FC<MyCreationsPageProps> = ({ config, user, onLogout }) => {
+  const queryClient = useQueryClient();
   const [activeFilter, setActiveFilter] = useState<'all' | 'pixart' | 'comic'>('all');
   const [selectedJob, setSelectedJob] = useState<GenerationJob | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
 
   const { data: jobs = [], isLoading, refetch, isFetching } = useQuery({
     queryKey: ['user-generations'],
@@ -27,11 +29,31 @@ export const MyCreationsPage: React.FC<MyCreationsPageProps> = ({ config, user, 
     refetchInterval: 5000,
   });
 
+  const retryMutation = useMutation({
+    mutationFn: (jobId: string) => retryGenerationJob(jobId),
+    onSuccess: (_data, jobId) => {
+      setRetryError(null);
+      // Invalidate both the list and the specific job so polling resumes
+      queryClient.invalidateQueries({ queryKey: ['user-generations'] });
+      queryClient.invalidateQueries({ queryKey: ['generation-job', jobId] });
+      // Update the selected job optimistically so the modal shows 'queued'
+      setSelectedJob((prev) => prev ? { ...prev, status: 'queued' } : null);
+    },
+    onError: (err) => {
+      setRetryError(getApiErrorMessage(err));
+    },
+  });
+
   const filteredJobs = jobs.filter((job) => {
     if (activeFilter === 'pixart') return job.module === 'pixel_portrait';
     if (activeFilter === 'comic') return job.module === 'comic';
     return true;
   });
+
+  // Keep modal in sync with refreshed job list
+  const liveSelectedJob = selectedJob
+    ? (jobs.find((j) => j.id === selectedJob.id) ?? selectedJob)
+    : null;
 
   return (
     <Shell user={user} authMode={config.authMode} onLogout={onLogout}>
@@ -136,17 +158,41 @@ export const MyCreationsPage: React.FC<MyCreationsPageProps> = ({ config, user, 
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredJobs.map((job) => (
-              <GenerationCard key={job.id} job={job} onSelect={(j) => setSelectedJob(j)} />
+              <GenerationCard key={job.id} job={job} onSelect={(j) => { setSelectedJob(j); setRetryError(null); }} />
             ))}
           </div>
         )}
 
         {/* Detail Modal */}
-        {selectedJob && (
-          <Modal isOpen={!!selectedJob} onClose={() => setSelectedJob(null)} title={`Job #${selectedJob.id.substring(0, 8)}`} maxWidth="xl">
+        {liveSelectedJob && (
+          <Modal isOpen={!!liveSelectedJob} onClose={() => { setSelectedJob(null); setRetryError(null); }} title={`Job #${liveSelectedJob.id.substring(0, 8)}`} maxWidth="xl">
             <div className="space-y-6 pt-2">
-              <JobProgress job={selectedJob} />
-              {selectedJob.status === 'completed' && <JobResultCard job={selectedJob} />}
+              <JobProgress job={liveSelectedJob} />
+              {liveSelectedJob.status === 'completed' && <JobResultCard job={liveSelectedJob} />}
+              {liveSelectedJob.status === 'failed' && (
+                <div className="space-y-3">
+                  {retryError && (
+                    <div className="flex items-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs font-medium text-rose-300">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span>{retryError}</span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                    <Button
+                      leftIcon={<RefreshCw className="h-4 w-4" />}
+                      isLoading={retryMutation.isPending}
+                      onClick={() => retryMutation.mutate(liveSelectedJob.id)}
+                    >
+                      Retry Execution
+                    </Button>
+                    <Link to="/comic">
+                      <Button variant="outline">
+                        New Storybook
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              )}
             </div>
           </Modal>
         )}
@@ -154,3 +200,4 @@ export const MyCreationsPage: React.FC<MyCreationsPageProps> = ({ config, user, 
     </Shell>
   );
 };
+

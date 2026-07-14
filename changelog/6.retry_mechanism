@@ -1,0 +1,64 @@
+# Implementation Plan - Task Resumability & Retry Handler
+
+Implement step-level job resumption and a user-facing retry mechanism for failed comic generation tasks. Since `api/internal/comic/pipeline.go` already persists intermediate pipeline state (`PipelineState`) in the database after every successful step and panel generation, resetting a failed job's status to `queued` will allow the background worker to resume execution seamlessly from the exact failed step without re-spending credits or re-generating completed panels.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **No Extra Credit Consumption**: Retrying a failed job will NOT deduct additional user credits, as the credit was already reserved/consumed during initial job creation.
+> - **Preserved State**: Retrying will retain all intermediate assets (narrative script, art direction, and generated panel images) in `generation_jobs.output` JSON. The worker will pick up at the recorded `state.Stage`.
+
+## Open Questions
+
+None. The existing pipeline state persistence structure supports resuming from any stage.
+
+---
+
+## Proposed Changes
+
+### Backend Components (`api`)
+
+#### [MODIFY] [service.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/generation/service.go)
+- Add `Retry(ctx context.Context, jobID, userID string) error` method:
+  - Verifies the job exists and belongs to the specified `userID`.
+  - Ensures the current `status` is `'failed'`.
+  - Updates the job status to `'queued'`, clears `error_code` and `error_message`, and updates `updated_at`.
+  - Retains existing `input` and `output` state intact.
+
+#### [MODIFY] [generation_handlers.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/httpapi/generation_handlers.go)
+- Add `retryGenerationHandler(a *auth.Service, g *generation.Service) http.HandlerFunc`:
+  - Handles `POST /api/v1/generations/{id}/retry`.
+  - Extracts authenticated user and URL parameter `{id}`.
+  - Calls `g.Retry(ctx, id, user.ID)`.
+  - Returns `http.StatusOK` with `{"jobId": id, "status": "queued"}`.
+
+#### [MODIFY] [routes.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/httpapi/routes.go)
+- Register route `r.Post("/generations/{id}/retry", retryGenerationHandler(a, g))` inside authenticated router group.
+
+---
+
+### Frontend Components (`ui`)
+
+#### [MODIFY] [client.ts](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/ui/src/api/client.ts)
+- Add export function `retryGenerationJob(jobId: string)` calling `POST /api/v1/generations/${jobId}/retry`.
+
+#### [MODIFY] [ComicForm.tsx](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/ui/src/components/generation/ComicForm.tsx)
+- Add retry mutation handling (`useMutation({ mutationFn: retryGenerationJob })`).
+- When `job.status === 'failed'`, render a prominent **Retry Execution** button in addition to "Try Another Storybook".
+- On retry click, invoke the retry mutation, trigger query invalidation for `['generation-job', activeJobId]`, and display status indication as the background worker resumes pipeline execution from the failed step.
+
+---
+
+## Verification Plan
+
+### Automated / API Verification
+1. Create a generation job and verify intermediate progress.
+2. Simulate a step failure or inspect a failed job in DB (`status = 'failed'`).
+3. Send `POST /api/v1/generations/{id}/retry` via API client / browser UI.
+4. Confirm `status` changes to `'queued'` and worker logs show resumption at the previous failed stage (e.g. `stage: HTML composition` or `stage: PDF composition`), skipping all previously completed panel image generations.
+
+### Manual Verification
+1. Submit a comic generation task in `ComicForm.tsx`.
+2. Observe error state when a failure occurs.
+3. Click the new **Retry Execution** button in `ComicForm.tsx`.
+4. Verify progress bar picks up from the failed stage and completes successfully without deducting additional credits.

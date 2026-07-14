@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { requestUploadURL, uploadFileToURL, createComicGeneration, fetchGenerationJob, getApiErrorMessage } from '../../api/client';
+import { requestUploadURL, uploadFileToURL, createComicGeneration, fetchGenerationJob, retryGenerationJob, getApiErrorMessage } from '../../api/client';
 import type { GenerationJob } from '../../api/types';
 import { FileUploader } from './FileUploader';
 import { JobProgress } from './JobProgress';
 import { JobResultCard } from './JobResultCard';
 import { Input, Textarea, Select } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { BookOpen, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { BookOpen, ArrowRight, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
 
 interface ComicFormProps {
   defaultProtagonistName?: string;
@@ -24,6 +24,7 @@ export const ComicForm: React.FC<ComicFormProps> = ({ defaultProtagonistName = '
   const [tone, setTone] = useState('inspiring');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
 
   // Poll active generation job status
@@ -54,6 +55,18 @@ export const ComicForm: React.FC<ComicFormProps> = ({ defaultProtagonistName = '
         language,
         tone,
       }),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: (jobId: string) => retryGenerationJob(jobId),
+    onSuccess: () => {
+      setRetryError(null);
+      // Invalidate the job query so polling resumes immediately
+      queryClient.invalidateQueries({ queryKey: ['generation-job', activeJobId] });
+    },
+    onError: (err) => {
+      setRetryError(getApiErrorMessage(err));
+    },
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -103,6 +116,7 @@ export const ComicForm: React.FC<ComicFormProps> = ({ defaultProtagonistName = '
     setBiggestLow('');
     setActiveJobId(null);
     setErrorMessage(null);
+    setRetryError(null);
     setStatusText(null);
   };
 
@@ -210,10 +224,25 @@ export const ComicForm: React.FC<ComicFormProps> = ({ defaultProtagonistName = '
           {job && <JobProgress job={job} />}
           {job && job.status === 'completed' && <JobResultCard job={job} onReset={resetForm} />}
           {job && job.status === 'failed' && (
-            <div className="pt-2 text-center">
-              <Button variant="outline" onClick={resetForm}>
-                Try Another Storybook
-              </Button>
+            <div className="space-y-3 pt-2">
+              {retryError && (
+                <div className="flex items-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs font-medium text-rose-300">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{retryError}</span>
+                </div>
+              )}
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  leftIcon={<RefreshCw className="h-4 w-4" />}
+                  isLoading={retryMutation.isPending}
+                  onClick={() => activeJobId && retryMutation.mutate(activeJobId)}
+                >
+                  Retry Execution
+                </Button>
+                <Button variant="outline" onClick={resetForm}>
+                  Try Another Storybook
+                </Button>
+              </div>
             </div>
           )}
         </div>
