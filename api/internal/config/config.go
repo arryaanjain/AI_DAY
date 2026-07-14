@@ -30,10 +30,19 @@ type Config struct {
 	QueueProvider string
 	RedisAddr     string
 	// AI provider settings
-	AIProvider      string
-	OpenAIKey       string
-	OpenAIModel     string
-	OpenAIChatModel string
+	AIProvider               string
+	OpenAIKey                string
+	OpenAIModel              string
+	OpenAIChatModel          string
+	OpenAIImageSize          string
+	OpenAIImageQuality       string
+	OpenAIImageOutputFormat  string
+	OpenAIOutputRequirements string
+	OpenAIOrgID              string
+	OpenAIProjectID          string
+	OpenAIBaseURL            string
+	// Dev mode settings
+	DevMode bool
 	// MSG91 settings
 	MSG91AuthKey    string
 	MSG91TemplateID string
@@ -42,6 +51,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
+		DevMode:                 value("DEV_MODE", "true") == "true",
 		HTTPAddress:             value("HTTP_ADDRESS", ":8080"),
 		DatabaseURL:             value("DATABASE_URL", "postgres://ai_day:ai_day@localhost:5432/ai_day?sslmode=disable"),
 		AuthMode:                value("AUTH_MODE", "phone"),
@@ -65,6 +75,13 @@ func Load() (Config, error) {
 		OpenAIKey:               value("OPENAI_API_KEY", ""),
 		OpenAIModel:             value("OPENAI_IMAGE_MODEL", "dall-e-3"),
 		OpenAIChatModel:         value("OPENAI_CHAT_MODEL", "gpt-4o"),
+		OpenAIImageSize:          value("OPENAI_IMAGE_SIZE", "1024x1024"),
+		OpenAIImageQuality:       value("OPENAI_IMAGE_QUALITY", "standard"),
+		OpenAIImageOutputFormat:  value("OPENAI_IMAGE_OUTPUT_FORMAT", "png"),
+		OpenAIOutputRequirements: value("OPENAI_IMAGE_OUTPUT_REQUIREMENTS", "Output requirements: professional comic panel, preserve characters and facial expressions faithfully."),
+		OpenAIOrgID:              value("OPENAI_ORG_ID", ""),
+		OpenAIProjectID:          value("OPENAI_PROJECT_ID", ""),
+		OpenAIBaseURL:            value("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		MSG91AuthKey:            value("MSG91_AUTH_KEY", ""),
 		MSG91TemplateID:         value("MSG91_TEMPLATE_ID", ""),
 		MSG91HeaderID:           value("MSG91_HEADER_ID", ""),

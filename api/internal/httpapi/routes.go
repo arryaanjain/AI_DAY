@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/arryaanjain/AI_DAY/internal/ai"
@@ -29,7 +30,7 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 
 	r.Use(requestLogger(logger))
 	a := auth.NewService(db)
-	phoneAuth := auth.NewPhoneAuthService(db, logger, cfg.MSG91AuthKey, cfg.MSG91TemplateID, cfg.MSG91HeaderID)
+	phoneAuth := auth.NewPhoneAuthService(db, logger, cfg.DevMode, cfg.MSG91AuthKey, cfg.MSG91TemplateID, cfg.MSG91HeaderID)
 	microsoftAuth := auth.NewMicrosoftAuthService(db, logger)
 	c := credits.New(db)
 	g := generation.New(db)
@@ -74,8 +75,18 @@ func NewRouter(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, storage
 		}
 
 		r.Get("/credits/balance", creditBalanceHandler(a, c))
-		r.Post("/payments/orders", createPaymentOrder(a, p))
+		r.Get("/generations", listGenerationsHandler(a, g))
+		r.Get("/generations/{id}", getGenerationHandler(a, g))
+		r.Post("/payments/orders", createPaymentOrder(cfg, a, p))
+		r.Post("/payments/verify", verifyPaymentHandler(a, p))
 		r.Post("/assets/upload-url", uploadURLHandler(a, s))
+		r.Get("/assets/{id}/download", downloadAssetHandler(s, storageProvider))
+		r.Get("/storage/*", func(w http.ResponseWriter, r *http.Request) {
+			rctx := chi.RouteContext(r.Context())
+			pathPrefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+			fs := http.StripPrefix(pathPrefix, http.FileServer(http.Dir(cfg.FilesystemBaseDir)))
+			fs.ServeHTTP(w, r)
+		})
 		r.Post("/generations/pixart", createGenerationHandler("pixel_portrait", a, c, s, g))
 		r.Post("/generations/comic", createGenerationHandler("comic", a, c, s, g))
 

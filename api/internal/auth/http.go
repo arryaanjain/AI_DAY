@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
-	user, err := s.CurrentUser(r.Context(), cookieValue(r))
+	user, err := s.CurrentUser(r.Context(), ExtractToken(r))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required.")
 		return
@@ -16,7 +16,7 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
-	_ = s.Revoke(r.Context(), cookieValue(r))
+	_ = s.Revoke(r.Context(), ExtractToken(r))
 	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -33,12 +33,19 @@ func AuthModeGuard(mode, expected string) http.HandlerFunc {
 		writeError(w, http.StatusServiceUnavailable, "AUTH_PROVIDER_NOT_CONFIGURED", "Authentication provider setup is incomplete.")
 	}
 }
-func cookieValue(r *http.Request) string {
-	cookie, err := r.Cookie(SessionCookieName)
-	if err != nil {
-		return ""
+func ExtractToken(r *http.Request) string {
+	if cookie, err := r.Cookie(SessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		return strings.TrimSpace(cookie.Value)
 	}
-	return strings.TrimSpace(cookie.Value)
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			return strings.TrimSpace(authHeader[7:])
+		}
+	}
+	if headerToken := r.Header.Get("X-Session-Token"); headerToken != "" {
+		return strings.TrimSpace(headerToken)
+	}
+	return ""
 }
 func writeData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")

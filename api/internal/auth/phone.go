@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -20,10 +21,12 @@ import (
 type PhoneAuthService struct {
 	db          *pgxpool.Pool
 	logger      *slog.Logger
+	devMode     bool
 	msg91APIKey string
 	templateID  string
 	headerID    string
 	otpStore    map[string]storedOTP
+	httpClient  *http.Client
 }
 
 type storedOTP struct {
@@ -33,19 +36,22 @@ type storedOTP struct {
 }
 
 // NewPhoneAuthService creates a new phone auth service
-func NewPhoneAuthService(db *pgxpool.Pool, logger *slog.Logger, authKey, templateID, headerID string) *PhoneAuthService {
+func NewPhoneAuthService(db *pgxpool.Pool, logger *slog.Logger, devMode bool, authKey, templateID, headerID string) *PhoneAuthService {
 	return &PhoneAuthService{
 		db:          db,
 		logger:      logger,
-		otpStore:    make(map[string]storedOTP),
+		devMode:     devMode,
 		msg91APIKey: authKey,
 		templateID:  templateID,
 		headerID:    headerID,
+		otpStore:    make(map[string]storedOTP),
+		httpClient:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
 // SendOTP sends an OTP to the phone number
 func (pas *PhoneAuthService) SendOTP(ctx context.Context, phone string) error {
+	phone = normalizePhone(phone)
 	if !isValidPhone(phone) {
 		return errors.New("invalid phone number")
 	}
@@ -60,15 +66,51 @@ func (pas *PhoneAuthService) SendOTP(ctx context.Context, phone string) error {
 		attempts:  0,
 	}
 
-	// In production, call MSG91 API to send SMS
-	// For demo, just log it
-	pas.logger.Info("OTP sent", "phone", maskPhone(phone), "otp", otp)
+	if pas.devMode {
+		pas.logger.Info("OTP generated (DEV_MODE=true)", "phone", maskPhone(phone), "otp", otp)
+		return nil
+	}
 
+	// Send actual OTP via MSG91 API when DEV_MODE=false
+	if pas.msg91APIKey == "" || pas.templateID == "" {
+		return errors.New("MSG91 credentials (MSG91_AUTH_KEY, MSG91_TEMPLATE_ID) are missing")
+	}
+
+	cleanPhone := strings.TrimPrefix(phone, "+")
+	reqURL := fmt.Sprintf("https://control.msg91.com/api/v5/otp?template_id=%s&mobile=%s&authkey=%s&otp=%s",
+		url.QueryEscape(pas.templateID),
+		url.QueryEscape(cleanPhone),
+		url.QueryEscape(pas.msg91APIKey),
+		url.QueryEscape(otp),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create MSG91 request: %w", err)
+	}
+
+	req.Header.Set("authkey", pas.msg91APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := pas.httpClient.Do(req)
+	if err != nil {
+		pas.logger.Error("failed to send MSG91 OTP", "error", err)
+		return fmt.Errorf("failed to send SMS via MSG91: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		pas.logger.Error("MSG91 API error status", "status", resp.Status)
+		return fmt.Errorf("MSG91 API error status: %s", resp.Status)
+	}
+
+	pas.logger.Info("actual OTP sent via MSG91 SMS", "phone", maskPhone(phone))
 	return nil
 }
 
 // VerifyOTP verifies the OTP and returns user ID
 func (pas *PhoneAuthService) VerifyOTP(ctx context.Context, phone, code string) (string, error) {
+	phone = normalizePhone(phone)
 	stored, ok := pas.otpStore[phone]
 	if !ok {
 		return "", errors.New("no OTP found for this phone")
@@ -119,6 +161,16 @@ func (pas *PhoneAuthService) VerifyOTP(ctx context.Context, phone, code string) 
 
 // Helper functions
 
+func normalizePhone(phone string) string {
+	phone = strings.TrimSpace(phone)
+	phone = strings.ReplaceAll(phone, " ", "")
+	phone = strings.ReplaceAll(phone, "-", "")
+	if !strings.HasPrefix(phone, "+") && len(phone) >= 10 {
+		phone = "+" + phone
+	}
+	return phone
+}
+
 func generateOTP() string {
 	b := make([]byte, 3)
 	rand.Read(b)
@@ -128,7 +180,7 @@ func generateOTP() string {
 }
 
 func isValidPhone(phone string) bool {
-	// Simple validation: starts with +, followed by 1-15 digits
+	// Simple validation: starts with +, followed by 10-15 digits
 	matched, _ := regexp.MatchString(`^\+\d{10,15}$`, phone)
 	return matched
 }
@@ -206,7 +258,7 @@ func (pas *PhoneAuthService) VerifyOTPHandler(authSvc *Service) http.HandlerFunc
 			Secure:   r.TLS != nil,
 		})
 
-		writeData(w, http.StatusOK, map[string]any{"userId": userID, "expiresAt": expires})
+		writeData(w, http.StatusOK, map[string]any{"userId": userID, "token": token, "expiresAt": expires})
 	}
 }
 

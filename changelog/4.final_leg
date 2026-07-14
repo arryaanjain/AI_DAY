@@ -1,0 +1,117 @@
+# AI Agents & OpenAI Provider Implementation
+
+Wire the real OpenAI provider and AI agent prompt templates into the existing pipeline so the worker processes PixArt and comic jobs with actual GPT-4o and DALL-E 3 calls, with profanity moderation and proper auth/payment gating.
+
+## Proposed Changes
+
+### Component 1 – AI Provider (`api/internal/ai/`)
+
+#### [MODIFY] [provider.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/ai/provider.go)
+Expand the interface to expose the two distinct use cases:
+- `GeneratePixArtImage(ctx, PixArtRequest) (ImageResult, error)` — selfie → stylized pixel portrait
+- `GenerateComic(ctx, ComicRequest) ([]ImageResult, error)` — high/low life events + face image → multi-panel story images
+- `ModerateText(ctx, text) (bool, error)` — reuse existing signature, already used by mock
+
+Add new request/result structs:
+```go
+type PixArtRequest  { SourceAssetURL, UserDisplayName string }
+type ComicRequest   { SourceAssetURL, BiggestHigh, BiggestLow, ProtagonistName, Language, Tone string }
+```
+
+#### [NEW] [openai.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/ai/openai.go)
+Real OpenAI provider using the `openai-go` community SDK (already a common Go dependency). Implementation:
+- **Moderation**: calls `POST /v1/moderations` with the OpenAI `omni-moderation-latest` model; returns `true` (flagged) if any category score > 0.5, plus a check for a hardcoded profanity/slur word list before hitting the API to save tokens.
+- **PixArt image generation** (DALL-E 3): builds a detailed artistic prompt that describes turning the selfie URL into a stylized pixel art portrait with the user's name watermarked.
+- **Comic narrative planning** (GPT-4o text): calls `POST /v1/chat/completions` with a structured `NarrativePlanner` system prompt (from the pipeline) to produce a `comic.Narrative` JSON object; the prompt embeds `biggestHigh`, `biggestLow`, `protagonistName`, `language`, and `tone`.
+- **Comic panel image generation** (DALL-E 3): for each `Panel` in the narrative, builds an image prompt incorporating the visual, emotion, and caption fields, plus a `--style` hint derived from the user-supplied tone.
+
+Struct:
+```go
+type OpenAIProvider struct { client *openai.Client; imageModel, chatModel string }
+func NewOpenAIProvider(apiKey, imageModel, chatModel string) *OpenAIProvider
+```
+
+#### [MODIFY] [mock.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/ai/mock.go)
+Update mock to implement the new interface methods (`GeneratePixArtImage`, `GenerateComic`) by returning deterministic placeholder responses.
+
+---
+
+### Component 2 – Comic Pipeline (`api/internal/comic/`)
+
+#### [MODIFY] [pipeline.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/comic/pipeline.go)
+Replace the one-liner minified stub with full prompt templates stored as Go string constants:
+
+| Constant | Purpose |
+|---|---|
+| `NarrativePlannerSystemPrompt` | Instructs GPT-4o to act as a comic writer; embeds the high/low life events, tone, language, and protagonist name; requests structured JSON matching `Narrative` |
+| `SafetyReviewSystemPrompt` | Instructs the model to re-review planned narrative for policy violations (PII, graphic content, profanity) and respond with `{"safe": true/false, "reason": "..."}` |
+| `ArtDirectionSystemPrompt` | Given the narrative JSON, produces a per-panel visual art direction brief (colour palette, mood, framing), also JSON |
+| `PanelImagePromptTemplate` | Go `text/template` that turns a single `Panel` + art direction into a DALL-E prompt string |
+| `PixArtImagePromptTemplate` | Turns `PixArtRequest` fields into a DALL-E prompt for stylised portrait generation |
+
+Also add a `PipelineRunner` struct with `Run(ctx, job)` that steps through `Stage` values in order, persisting output per stage.
+
+---
+
+### Component 3 – Worker (`api/internal/worker/worker.go`)
+
+#### [MODIFY] [worker.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/worker/worker.go)
+Replace the naive `aiProvider.GenerateImage` call with the multi-stage pipeline runner:
+
+1. **Decode input** — parse `generationRequest` JSON from `generation_jobs.input`.
+2. **Moderate user text** — call `aiProvider.ModerateText` on `biggestHigh + biggestLow + protagonistName`; if flagged, fail job with `CONTENT_POLICY_VIOLATION`.
+3. **Branch by module**:
+   - `pixel_portrait` → `aiProvider.GeneratePixArtImage(PixArtRequest{SourceAssetURL, DisplayName})`
+   - `comic` → call `pipeline.PipelineRunner.Run(ctx, job)` which orchestrates the multi-stage GPT + DALL-E flow
+4. **Upload result images** to storage via `assetService`; store asset IDs in `generation_jobs.output` JSON.
+5. **Mark complete** or retry on transient errors; hard-fail on policy violations.
+
+---
+
+### Component 4 – Main Binaries
+
+#### [MODIFY] [api/cmd/api/main.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/cmd/api/main.go)
+Replace the `TODO` block — when `cfg.AIProvider == "openai" && cfg.OpenAIKey != ""`, instantiate `ai.NewOpenAIProvider(cfg.OpenAIKey, cfg.OpenAIModel, "gpt-4o")` instead of the mock.
+
+#### [MODIFY] [api/cmd/worker/main.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/cmd/worker/main.go)
+Same change as `api/main.go` — real provider when key is present.
+
+---
+
+### Component 5 – Dependencies
+
+#### [MODIFY] [go.mod](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/go.mod)
+Add the official OpenAI Go SDK:
+```
+github.com/openai/openai-go v0.1.0-alpha.62
+```
+Run `go get github.com/openai/openai-go` and `go mod tidy`.
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> **OpenAI API key** — The `.env` has `OPENAI_API_KEY=` (empty). You need to provide the real key and set `AI_PROVIDER=openai` for the real provider to activate. Until then the mock is used. Should we add a dev-friendly mode that auto-uses mock when the key is absent (current behavior) or hard-fail at startup if the provider is `openai` but no key is given?
+
+> [!IMPORTANT]
+> **Comic panel count** — How many panels per comic do you want? The prompt template will default to 6 panels (2 pages × 3 panels). Confirm or override.
+
+> [!NOTE]
+> **DALL-E 3 image URLs** — OpenAI returns temporary signed URLs (expire in ~60 min). The worker will immediately download and re-upload to your storage provider (MinIO/filesystem). Confirm this is the expected behavior or if you prefer storing the raw URL.
+
+> [!NOTE]
+> **Chat model** — Using `gpt-4o` for narrative planning. Config key `OPENAI_CHAT_MODEL` will be added alongside the existing `OPENAI_IMAGE_MODEL`.
+
+## Verification Plan
+
+### Automated
+- `go build ./...` from `api/` must pass with no errors.
+- `go vet ./...` must pass.
+
+### Manual
+1. Set `AI_PROVIDER=openai`, `OPENAI_API_KEY=<real-key>` in `.env`.
+2. Start worker; submit a PixArt job via the UI — worker log should show `processing job` with module `pixel_portrait` and call OpenAI.
+3. Submit a comic job with high/low text containing profanity — worker should fail job with `CONTENT_POLICY_VIOLATION`.
+4. Submit a clean comic job — worker should step through narrative → safety → art direction → panel images → complete.
+5. Mock path: remove `OPENAI_API_KEY`, restart — `mock` provider is used, no API calls made.

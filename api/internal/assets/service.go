@@ -73,9 +73,9 @@ func (s *Service) CreateUploadIntent(ctx context.Context, userID, filename, mime
 func (s *Service) Get(ctx context.Context, assetID string) (*Asset, error) {
 	var asset Asset
 	err := s.db.QueryRow(ctx, `
-		SELECT id, user_id, object_key, original_filename, mime_type, size_bytes
+		SELECT id::text, user_id::text, object_key, COALESCE(original_filename, ''), mime_type, size_bytes
 		FROM assets
-		WHERE id = $1
+		WHERE id = $1::uuid
 	`, assetID).Scan(&asset.ID, &asset.UserID, &asset.ObjectKey, &asset.OriginalName, &asset.MimeType, &asset.Size)
 
 	if err != nil {

@@ -1,0 +1,24 @@
+# Implementation Plan — Fixing Panel Generation & Enhancing PDF Composition
+
+We will address the duplicate panel generation issue (where panel numbers were repeating across pages and overwriting each other) and enhance the PDF layout to feel like a premium, professionally typeset comic book.
+
+## Proposed Changes
+
+### Comic Pipeline Component
+
+#### [MODIFY] [pipeline.go](file:///c:/Users/Admin/Desktop/Everything/AI_DAY/api/internal/comic/pipeline.go)
+- **Fix Duplicate Panel Bug**: Ensure all loops, storage object keys, and db registration use `page.PageNumber` as part of the unique panel identification. This avoids overwriting panel assets in storage and reusing early panels on subsequent pages. (Partially implemented, will verify compilation).
+- **Improve PDF Generation**:
+  - **Text Wrapping**: Replace fixed `Cell` calls with `MultiCell` or custom line-wrapping logic for captions and dialogues to prevent truncation.
+  - **Layout Scaling**: Support flexible grids (up to 4 panels) with proper margins, clean panel borders (black frame with a custom line thickness), and balanced padding.
+  - **Aesthetics**: Draw styled speech bubbles/dialogue cards and clean caption boxes with distinct borders, rather than basic overlapping text.
+  - **Error Handling**: Enhance robustness when downloading/decoding images.
+
+## Verification Plan
+
+### Automated Tests
+- Run `go test ./...` in the `api/` folder to ensure no regressions.
+- Execute our e-end-to-end trigger script (`trigger_job.go`) to insert a new job in the database, let the worker run it using the real OpenAI credentials, and verify that the output has unique, correctly styled panel images.
+
+### Manual Verification
+- View the generated PDF from the storage directory (`api/storage/users/.../story.pdf`) using a PDF viewer to inspect the layout, borders, text wrapping, and image placements.

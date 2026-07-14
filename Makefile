@@ -8,9 +8,9 @@ setup:
 dev:
 	@echo "Run 'make api', 'cd ui && npm run dev', and 'cd admin && npm run dev' in separate terminals."
 api:
-	cd $(API_DIR) && go run ./cmd/api
+	cd $(API_DIR) && air -c .air.api.toml
 worker:
-	cd $(API_DIR) && go run ./cmd/worker
+	cd $(API_DIR) && air -c .air.worker.toml
 test:
 	cd $(API_DIR) && go test ./...
 lint:
