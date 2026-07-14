@@ -1,7 +1,7 @@
 import React from 'react';
 import type { GenerationJob, ComicPipelineState } from '../../api/types';
 import { Badge } from '../ui/Badge';
-import { AlertCircle, Sparkles, BookOpen, FileText, Palette, Image as ImageIcon, FileCheck } from 'lucide-react';
+import { AlertCircle, Sparkles, BookOpen, FileText, Palette, Image as ImageIcon, Code, FileCheck } from 'lucide-react';
 
 interface JobProgressProps {
   job: GenerationJob;
@@ -12,7 +12,8 @@ const STAGES = [
   { key: 'safety_review', label: '2. Safety Review', icon: FileText },
   { key: 'art_direction', label: '3. Art Direction', icon: Palette },
   { key: 'panel_generation', label: '4. Panel Generation', icon: ImageIcon },
-  { key: 'pdf_composition', label: '5. PDF Storybook', icon: FileCheck },
+  { key: 'html_composition', label: '5. Web Comic (HTML)', icon: Code },
+  { key: 'pdf_composition', label: '6. PDF Storybook', icon: FileCheck },
 ];
 
 export const JobProgress: React.FC<JobProgressProps> = ({ job }) => {
@@ -46,7 +47,7 @@ export const JobProgress: React.FC<JobProgressProps> = ({ job }) => {
           <div className="flex items-center justify-between text-xs text-slate-300">
             <span>Pipeline Execution in Progress…</span>
             <span className="font-mono text-cyan-300 font-semibold">
-              {isComic ? `Stage ${currentStageIdx + 1} / 5` : 'Generating DALL-E Portrait'}
+              {isComic ? `Stage ${currentStageIdx + 1} / ${STAGES.length}` : 'Generating DALL-E Portrait'}
             </span>
           </div>
 
@@ -55,14 +56,14 @@ export const JobProgress: React.FC<JobProgressProps> = ({ job }) => {
               className="h-full bg-gradient-to-r from-cyan-400 to-indigo-500 transition-all duration-500 rounded-full"
               style={{
                 width: isComic
-                  ? `${Math.max(15, ((currentStageIdx + 1) / 5) * 100)}%`
+                  ? `${Math.max(15, ((currentStageIdx + 1) / STAGES.length) * 100)}%`
                   : '65%',
               }}
             />
           </div>
 
           {isComic && (
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-2">
               {STAGES.map((s, idx) => {
                 const Icon = s.icon;
                 const isDone = job.status === 'completed' || idx < currentStageIdx;

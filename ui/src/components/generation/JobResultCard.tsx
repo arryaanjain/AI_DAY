@@ -1,7 +1,7 @@
 import React from 'react';
 import type { GenerationJob, ComicPipelineState, PixartJobOutput } from '../../api/types';
 import { Button } from '../ui/Button';
-import { Download, CheckCircle2, BookOpen, ExternalLink, RefreshCw } from 'lucide-react';
+import { Download, CheckCircle2, BookOpen, ExternalLink, RefreshCw, Code } from 'lucide-react';
 
 interface JobResultCardProps {
   job: GenerationJob;
@@ -23,6 +23,12 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
     : (comicOutput?.pdfUrl && !comicOutput.pdfUrl.startsWith('file://')
         ? (comicOutput.pdfUrl.startsWith('/') ? `${apiBase}${comicOutput.pdfUrl}` : comicOutput.pdfUrl)
         : `${apiBase}/api/v1/storage/users/${job.userId}/comic/${job.id}/story.pdf`);
+
+  const htmlUrl = comicOutput?.htmlAssetId
+    ? `${apiBase}/api/v1/assets/${comicOutput.htmlAssetId}/download`
+    : (comicOutput?.htmlUrl && !comicOutput.htmlUrl.startsWith('file://')
+        ? (comicOutput.htmlUrl.startsWith('/') ? `${apiBase}${comicOutput.htmlUrl}` : comicOutput.htmlUrl)
+        : `${apiBase}/api/v1/storage/users/${job.userId}/comic/${job.id}/story.html`);
 
   const downloadUrl = pixartOutput?.assetId
     ? `${apiBase}/api/v1/assets/${pixartOutput.assetId}/download`
@@ -126,13 +132,20 @@ export const JobResultCard: React.FC<JobResultCardProps> = ({ job, onReset }) =>
 
           <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
             <div className="text-xs text-slate-400">
-              PDF Storybook formatted with print-ready resolution and dialogue captions.
+              Generated in responsive Web Comic (HTML) and print-ready PDF formats.
             </div>
-            <a href={pdfUrl || '#'} target="_blank" rel="noopener noreferrer" download={`comic-storybook-${job.id}.pdf`}>
-              <Button size="lg" leftIcon={<Download className="h-5 w-5" />} rightIcon={<ExternalLink className="h-4 w-4" />}>
-                Download PDF Storybook
-              </Button>
-            </a>
+            <div className="flex flex-wrap items-center gap-3">
+              <a href={htmlUrl || '#'} target="_blank" rel="noopener noreferrer" download={`web-comic-${job.id}.html`}>
+                <Button variant="outline" size="md" leftIcon={<Code className="h-4 w-4" />} rightIcon={<ExternalLink className="h-3.5 w-3.5" />}>
+                  Web Comic (HTML)
+                </Button>
+              </a>
+              <a href={pdfUrl || '#'} target="_blank" rel="noopener noreferrer" download={`comic-storybook-${job.id}.pdf`}>
+                <Button size="md" leftIcon={<Download className="h-4 w-4" />} rightIcon={<ExternalLink className="h-3.5 w-3.5" />}>
+                  Download PDF
+                </Button>
+              </a>
+            </div>
           </div>
         </div>
       )}
